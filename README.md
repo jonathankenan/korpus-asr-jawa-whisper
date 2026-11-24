@@ -17,8 +17,7 @@ Danendra Shafi Athallah (13523136), Jonathan Kenan Budianto (13523139), Jovandra
 
 Penutur kelompok 5 (S01 sampai S10 pada repo asalnya) dinomori ulang menjadi S11 sampai S20 pada data gabungan. Pemetaannya akan dicatat di `data/id_mapping.csv`.
 
-Audio dan data mentah **tidak di-commit** ke repo ini. Kedua korpus diambil ke folder lokal yang di-gitignore. Data kelompok 5 hanya boleh dipakai untuk keperluan akademik mata kuliah ini dan tidak boleh disebarkan ke luar repo asalnya.
-
+Audio dan data mentah **tidak di-commit** ke repo ini. Kedua korpus diambil ke folder lokal yang di-gitignore.
 ## Cara menyiapkan data
 
 ```bash
@@ -28,6 +27,15 @@ cd korpus-asr-jawa-whisper
 ```
 
 Skrip meng-clone kedua korpus ke `corpus_k11/` dan `corpus_k05/` lalu mengunci keduanya pada commit di tabel di atas. Ukurannya sekitar 370 MB dan 570 MB.
+
+Setelah data terambil, buat manifest gabungan dan split:
+
+```bash
+python3 src/build_manifest.py
+python3 src/make_splits.py
+```
+
+Rincian dataset, strategi split, dan keterbatasannya ada di `data/DATASET.md`.
 
 ## Struktur repo
 

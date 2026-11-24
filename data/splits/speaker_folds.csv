@@ -1,0 +1,21 @@
+speaker,group,gender,dialect,speaker_status,fold1,fold2,fold3,fold4,fold5
+S01,k11,M,Jawa Timuran (Suroboyoan),native,train,train,val,test,train
+S02,k11,M,Jawa Tengahan (Semarangan),native,train,val,test,train,train
+S03,k11,M,Jawa Tengahan (Solo),non-native,test,train,train,train,val
+S04,k11,M,Jawa Mataraman (Jogja),native,train,train,train,val,test
+S05,k11,M,Jawa Tengahan/Mataraman (ngoko),heritage,val,test,train,train,train
+S06,k11,F,Jawa Tengahan (Semarangan),native,train,train,test,train,train
+S07,k11,F,Jawa Timuran (Suroboyoan),native,test,train,train,train,train
+S08,k11,F,Jawa Timuran (Suroboyoan),native,train,train,train,train,test
+S09,k11,F,Jawa campuran (Tengahan + Malangan),non-native,train,train,train,test,train
+S10,k11,F,Jawa Timuran (Trenggalekan/Mataraman wetan),native,train,test,train,train,train
+S11,k05,M,Jawa,non-native,train,test,train,train,train
+S12,k05,M,Jawa,non-native,train,train,train,train,test
+S13,k05,F,Jawa Solo,native,val,test,train,train,train
+S14,k05,M,Jawa Timuran,native,test,train,train,train,train
+S15,k05,M,Jawa Jogja,native,train,train,test,train,train
+S16,k05,M,Jawa Jogja,native,train,train,train,test,train
+S17,k05,F,Jawa Jogja,native,test,train,train,train,val
+S18,k05,F,Jawa Jogja,native,train,val,test,train,train
+S19,k05,F,Jawa Jogja,native,train,train,val,test,train
+S20,k05,F,Jawa Jogja,native,train,train,train,val,test
