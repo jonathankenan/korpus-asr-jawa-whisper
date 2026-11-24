@@ -6,7 +6,9 @@ Keluaran (folder data/):
   id_mapping.csv  pemetaan ID penutur baru ke ID asal
 
 Skrip ini TIDAK menyaring segmen dan TIDAK menormalisasi teks. Segmen bermasalah hanya diberi
-tanda pada kolom `flags`; keputusan membuang atau memakainya diambil di tahap berikutnya.
+tanda pada kolom `flags`, dan kolom `usable` menandai baris yang tidak mungkin dipakai.
+Label bahasa dikoreksi memakai LABEL_FIXES di bawah (label asal tetap disimpan di
+`language_label_src`).
 Kolom label_speaker pada anotasi kelompok ini tidak disalin karena memuat nama penutur.
 
 Jalankan dari akar repo setelah scripts/fetch_data.sh:
@@ -27,6 +29,26 @@ K05_ID_OFFSET = 10  # S01-S10 kelompok 5 menjadi S11-S20
 SHORT_SEC = 1.0
 LONG_SEC = 30.0
 BEYOND_TOL = 0.05
+UNUSABLE_FLAGS = {"no_text", "neg_duration", "beyond_audio", "audio_missing"}
+
+# Koreksi label bahasa k11: segmen berlabel Inggris padahal teksnya tidak memuat kata Inggris.
+# utt_id -> (label asal, label baru)
+LABEL_FIXES = {
+    "S02_0066": ("Campur (Jawa-Inggris)", "Jawa"),
+    "S02_0153": ("Campur (Jawa-Inggris)", "Indonesia"),
+    "S05_0081": ("Campur (Jawa-Inggris)", "Campur (Jawa-Indonesia)"),
+    "S07_0289": ("Inggris", "Jawa"),
+    "S07_0411": ("Inggris", "Indonesia"),
+    "S07_0508": ("Inggris", "Jawa"),
+    "S07_0509": ("Inggris", "Jawa"),
+    "S07_0510": ("Inggris", "Jawa"),
+    "S07_0511": ("Inggris", "Jawa"),
+    "S10_0164": ("Campur (Jawa-Inggris)", "Jawa"),
+    "S10_0172": ("Campur (Jawa-Inggris)", "Campur (Jawa-Indonesia)"),
+    "S10_0247": ("Campur (Jawa-Inggris)", "Jawa"),
+    "S10_0275": ("Campur (Jawa-Inggris)", "Jawa"),
+    "S10_0324": ("Campur (Jawa-Inggris)", "Campur (Jawa-Indonesia)"),
+}
 
 _dur_cache = {}
 
@@ -198,6 +220,39 @@ def build():
     return manifest, spk11, meta05
 
 
+def finalize(manifest):
+    """Terapkan koreksi label bahasa (LABEL_FIXES) dan hitung kolom usable.
+
+    language_label_src menyimpan label asal dari anotasi. usable = "no" untuk baris yang tidak
+    mungkin dipakai (tanpa teks, waktu tidak valid, melewati akhir audio, atau audio hilang);
+    tanda lain (short_lt1s, long_gt30s, filename_fixed) tidak memengaruhi usable.
+    """
+    seen = set()
+    out = []
+    for r in manifest:
+        new = {}
+        for k, v in r.items():
+            new[k] = v
+            if k == "language_label":
+                new["language_label_src"] = v
+        fix = LABEL_FIXES.get(r["utt_id"])
+        if fix:
+            old, repl = fix
+            if r["language_label"] != old:
+                raise SystemExit(f"koreksi label {r['utt_id']}: label asal {r['language_label']!r} "
+                                 f"tidak sama dengan {old!r}")
+            new["language_label"] = repl
+            seen.add(r["utt_id"])
+        flags = set(r["flags"].split(";")) - {""}
+        new["usable"] = "no" if flags & UNUSABLE_FLAGS else "yes"
+        out.append(new)
+    missing = set(LABEL_FIXES) - seen
+    if missing:
+        raise SystemExit(f"utt_id pada LABEL_FIXES tidak ditemukan di manifest: {sorted(missing)}")
+    print(f"koreksi label bahasa diterapkan: {len(seen)} baris")
+    return out
+
+
 def write_csv(path, rows, fields):
     with open(path, "w", encoding="utf-8", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fields)
@@ -208,6 +263,7 @@ def write_csv(path, rows, fields):
 def main():
     OUT.mkdir(exist_ok=True)
     manifest, spk11, meta05 = build()
+    manifest = finalize(manifest)
     fields = list(manifest[0].keys())
     write_csv(OUT / "manifest.csv", manifest, fields)
 
@@ -249,6 +305,7 @@ def main():
               f"bertranskripsi {sum(s['transcribed_seconds'] for s in sp)/60:.1f} menit")
     fc = collections.Counter(f for r in manifest for f in r["flags"].split(";") if f)
     print("jumlah baris per flag:", dict(fc))
+    print("usable:", dict(collections.Counter(r["usable"] for r in manifest)))
     for g in ("k11", "k05"):
         fc = collections.Counter(f for r in manifest if r["group"] == g for f in r["flags"].split(";") if f)
         print(f"  flag {g}:", dict(fc))

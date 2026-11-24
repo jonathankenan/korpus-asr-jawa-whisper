@@ -43,11 +43,11 @@ Sumber label: untuk k11, dialek dan status dibaca dari kolom `label_dialek` pada
 
 ## Manifest (`data/manifest.csv`)
 
-Satu baris per segmen anotasi, semua baris dipertahankan. Kolom utama: `utt_id`, `speaker`, `group`, `orig_speaker`, `orig_file`, `audio_path` (relatif terhadap akar repo), `start`, `end`, `duration`, `text_raw`, `language_label`, `dialect`, `topic`, `event`, `asr_confidence`, `gender`, `speaker_status`, `transcript_status`, `flags`.
+Satu baris per segmen anotasi, semua baris dipertahankan. Kolom utama: `utt_id`, `speaker`, `group`, `orig_speaker`, `orig_file`, `audio_path` (relatif terhadap akar repo), `start`, `end`, `duration`, `text_raw`, `language_label`, `language_label_src`, `dialect`, `topic`, `event`, `asr_confidence`, `gender`, `speaker_status`, `transcript_status`, `flags`, `usable`.
 
 - `text_raw` adalah teks sumber tanpa perubahan. Belum ada normalisasi.
 - `transcript_status`: `draft_asr` untuk k11 (transkripsi hasil ASR yang belum dikoreksi manusia) dan `unverified` untuk k05 (status review tidak terdokumentasi).
-- `language_label` hanya tersedia untuk k11.
+- `language_label` hanya tersedia untuk k11. Nilainya sudah dikoreksi pada 14 segmen yang berlabel Inggris padahal teksnya tidak memuat kata Inggris (daftar koreksi di `LABEL_FIXES` pada `src/build_manifest.py`). `language_label_src` menyimpan label asal dari anotasi.
 - Kolom `label_speaker` pada anotasi k11 tidak disalin karena memuat nama penutur.
 
 ### Tanda pada baris (`flags`)
@@ -62,6 +62,23 @@ Tanda hanya menandai baris. Tidak ada baris yang dibuang oleh skrip.
 | `neg_duration` | waktu selesai tidak lebih besar dari waktu mulai | 0 | 2 (S04 asal) |
 | `beyond_audio` | waktu selesai melewati akhir audio | 0 | 7 |
 | `filename_fixed` | nama berkas pada anotasi tidak cocok, dicocokkan dengan mengganti `_` menjadi `-` | 0 | 28 (S06 asal) |
+
+### Kolom `usable`
+
+`usable` bernilai `no` untuk 29 baris yang tidak mungkin dipakai: yang bertanda `no_text`, `neg_duration`, atau `beyond_audio` (atau `audio_missing`, yang tidak terjadi pada data ini). Sisanya, 3.081 baris, bernilai `yes`. Tanda `short_lt1s`, `long_gt30s`, dan `filename_fixed` tidak memengaruhi `usable`.
+
+### Label bahasa (k11, segmen berteks, setelah koreksi)
+
+| Label | Segmen | Menit |
+|---|---|---|
+| Jawa | 1.870 | 77,1 |
+| Indonesia | 176 | 5,1 |
+| Campur (Jawa-Indonesia) | 86 | 10,7 |
+| Campur (Jawa-Inggris) | 22 | 1,6 |
+| Campur (Jawa-Indonesia-Inggris) | 5 | 0,9 |
+| Inggris | 9 | 0,3 |
+
+Koreksi hanya mengubah label yang menyebut Inggris tanpa ada kata Inggris di teksnya. Pada 11 segmen, satu-satunya kata Inggris adalah "So" atau "is" (misalnya `S04_0128`, `S08_0061`), kemungkinan salah dengar ASR, dan labelnya dibiarkan. Label "Inggris" murni pada beberapa segmen yang isinya campuran juga tidak diubah (misalnya `S10_0020`).
 
 ## Strategi pembagian data
 
