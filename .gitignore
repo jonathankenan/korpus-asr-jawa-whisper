@@ -1,0 +1,10 @@
+corpus_k11/
+corpus_k05/
+models/
+checkpoints/
+*.wav
+*.m4a
+__pycache__/
+.venv/
+.env
+wandb/
