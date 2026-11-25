@@ -1,6 +1,8 @@
 # Dokumentasi dataset gabungan
 
-Dataset ini menyatukan korpus Bahasa Jawa kelompok ini (`corpus_k11`, ID S01 sampai S10) dan korpus kelompok 5 (`corpus_k05`, ID asal S01 sampai S10, dinomori ulang menjadi S11 sampai S20). Sumber dan commit yang dipakai tercantum di README. Semua angka di bawah dihitung oleh `src/build_manifest.py` dan `src/make_splits.py`.
+Dataset ini menyatukan korpus Bahasa Jawa kelompok ini (`corpus_k11`, ID S01 sampai S10) dan korpus kelompok 5 (`corpus_k05`, ID asal S01 sampai S10, dinomori ulang menjadi S11 sampai S20). Sumber korpus tercantum di README, dan versi yang dipakai dikunci di `scripts/fetch_data.sh`. Semua angka di bawah dihitung oleh `src/build_manifest.py` dan `src/make_splits.py`.
+
+Korpus kelompok 5 dipakai pada rilis `v1.1-koreksi` (commit `20047ca`), yang memperbaiki nama berkas S06, stempel waktu S03 dan S08, segmen tumpang tindih, dan transkripsi yang tertukar pada anotasi mereka (rincian di `CHANGES.md` pada repo mereka).
 
 ## Ringkasan
 
@@ -9,7 +11,7 @@ Dataset ini menyatukan korpus Bahasa Jawa kelompok ini (`corpus_k11`, ID S01 sam
 | Penutur | 10 (5 L, 5 P) | 10 (5 L, 5 P) | 20 (10 L, 10 P) |
 | Segmen anotasi | 2.188 | 922 | 3.110 |
 | Durasi audio | 108,6 menit | 115,5 menit | 224,1 menit |
-| Durasi segmen bertranskripsi | 95,6 menit | 100,8 menit | 196,4 menit |
+| Durasi segmen bertranskripsi | 95,6 menit | 100,3 menit | 196,0 menit |
 | File audio | 10 (1 per penutur) | 40 (4 per penutur) | 50 |
 
 Durasi bertranskripsi adalah jumlah durasi segmen yang berteks dan berdurasi positif. Angka ini belum disaring oleh aturan apa pun (lihat bagian Tanda pada baris).
@@ -59,13 +61,13 @@ Tanda hanya menandai baris. Tidak ada baris yang dibuang oleh skrip.
 | `no_text` | tidak ada transkripsi (baris `-gap`) | 20 | 0 |
 | `short_lt1s` | durasi di bawah 1 detik | 252 | 6 |
 | `long_gt30s` | durasi di atas 30 detik | 1 | 0 |
-| `neg_duration` | waktu selesai tidak lebih besar dari waktu mulai | 0 | 2 (S04 asal) |
-| `beyond_audio` | waktu selesai melewati akhir audio | 0 | 7 |
-| `filename_fixed` | nama berkas pada anotasi tidak cocok, dicocokkan dengan mengganti `_` menjadi `-` | 0 | 28 (S06 asal) |
+| `neg_duration` | waktu selesai tidak lebih besar dari waktu mulai | 0 | 0 |
+| `beyond_audio` | waktu selesai melewati akhir audio | 0 | 0 |
+| `filename_fixed` | nama berkas pada anotasi tidak cocok, dicocokkan dengan mengganti `_` menjadi `-` | 0 | 0 |
 
 ### Kolom `usable`
 
-`usable` bernilai `no` untuk 29 baris yang tidak mungkin dipakai: yang bertanda `no_text`, `neg_duration`, atau `beyond_audio` (atau `audio_missing`, yang tidak terjadi pada data ini). Sisanya, 3.081 baris, bernilai `yes`. Tanda `short_lt1s`, `long_gt30s`, dan `filename_fixed` tidak memengaruhi `usable`.
+`usable` bernilai `no` untuk 20 baris yang tidak mungkin dipakai: yang bertanda `no_text`, `neg_duration`, atau `beyond_audio` (atau `audio_missing`, yang tidak terjadi pada data ini). Sisanya, 3.090 baris, bernilai `yes`. Tanda `short_lt1s`, `long_gt30s`, dan `filename_fixed` tidak memengaruhi `usable`.
 
 ### Label bahasa (k11, segmen berteks, setelah koreksi)
 
@@ -94,11 +96,11 @@ Penutur non-native dan heritage (S03, S05, S09, S11, S12) disebar agar tidak men
 
 | Fold | Test | Validation | Menit test | Menit validation | Menit train |
 |---|---|---|---|---|---|
-| 1 | S03, S07, S14, S17 | S05, S13 | 38,6 | 21,7 | 136,2 |
-| 2 | S05, S10, S11, S13 | S02, S18 | 43,9 | 16,8 | 135,7 |
-| 3 | S02, S06, S15, S18 | S01, S19 | 38,3 | 19,0 | 139,2 |
-| 4 | S01, S09, S16, S19 | S04, S20 | 39,6 | 17,2 | 139,7 |
-| 5 | S04, S08, S12, S20 | S03, S17 | 36,1 | 19,2 | 141,2 |
+| 1 | S03, S07, S14, S17 | S05, S13 | 38,9 | 21,4 | 135,6 |
+| 2 | S05, S10, S11, S13 | S02, S18 | 43,6 | 16,3 | 136,1 |
+| 3 | S02, S06, S15, S18 | S01, S19 | 37,8 | 19,0 | 139,2 |
+| 4 | S01, S09, S16, S19 | S04, S20 | 39,6 | 17,2 | 139,2 |
+| 5 | S04, S08, S12, S20 | S03, S17 | 36,1 | 19,2 | 140,7 |
 
 Berkas: `data/splits/speaker_folds.csv` (peran tiap penutur pada tiap fold) dan `data/splits/fold1.csv` sampai `fold5.csv` (`utt_id`, `speaker`, `split`, mencakup seluruh baris manifest termasuk yang bertanda).
 
