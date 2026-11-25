@@ -2,7 +2,7 @@
 
 Tugas Besar Fase 2 IF4071 Pemrosesan Ucapan (Semester 1 2026/2027, STEI ITB): membangun sistem pengenal ucapan (ASR) Bahasa Jawa dengan teknik Whisper, memakai korpus Fase 1 kelompok ini yang digabung dengan korpus kelompok 5.
 
-Status: **dalam pengerjaan**. Belum ada hasil eksperimen.
+Status: **dalam pengerjaan**. Preprocessing audio dan normalisasi teks selesai; eksperimen Whisper belum dilakukan.
 
 ## Anggota kelompok
 
@@ -36,6 +36,34 @@ python3 src/make_splits.py
 ```
 
 Rincian dataset, strategi split, dan keterbatasannya ada di `data/DATASET.md`.
+
+## Preprocessing
+
+Install dependensi terlebih dahulu:
+
+```bash
+pip install -r requirements.txt
+```
+
+### 1. Preprocessing audio
+
+Memotong segmen dari file audio panjang, mengonversi ke mono 16 kHz 16-bit, dan menormalisasi amplitudo:
+
+```bash
+python3 src/preprocess_audio.py --manifest data/manifest.csv --out processed_audio
+```
+
+Tambahkan `--vad` untuk memangkas senyap di awal/akhir segmen. File hasil disimpan ke `processed_audio/<speaker>/<utt_id>.wav`. Konfigurasi lengkap ada di `configs/preprocess.yaml`.
+
+### 2. Normalisasi teks
+
+Menyeragamkan konvensi transkripsi dua korpus (k11 dan k05), menghapus tag khusus seperti `[NAMA]`, `[NOISE]`, mengecilkan huruf, dan membersihkan tanda baca:
+
+```bash
+python3 src/normalize_text.py --manifest data/manifest.csv --out data/manifest_normalized.csv
+```
+
+Tambahkan `--tokenize` untuk menambah kolom `text_chars` (tokenisasi level karakter, format Whisper/CTC). Konfigurasi lengkap ada di `configs/normalize.yaml`.
 
 ## Struktur repo
 
