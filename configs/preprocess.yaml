@@ -1,0 +1,29 @@
+# Konfigurasi preprocessing audio
+# Dipakai oleh src/preprocess_audio.py
+#
+# Jalankan: python3 src/preprocess_audio.py --manifest data/manifest.csv --out processed_audio
+
+preprocessing:
+  # Target format audio (sesuai spesifikasi Fase 2 dan kebutuhan Whisper)
+  target_sample_rate: 16000       # Hz
+  target_bit_depth: 16            # bit (PCM signed integer)
+  target_channels: 1              # mono
+
+  # Normalisasi amplitudo
+  peak_normalize: true
+  peak_dbfs: -3.0                 # target puncak amplitudo (dBFS)
+
+  # Voice Activity Detection (VAD) — pangkas senyap di awal/akhir
+  vad:
+    enabled: false                # set true untuk mengaktifkan
+    top_db: 30.0                  # threshold energi (dB di bawah puncak)
+    frame_ms: 25                  # panjang frame VAD (ms)
+    hop_ms: 10                    # hop VAD (ms)
+
+  # Filter segmen (berdasarkan kolom manifest)
+  usable_only: true               # hanya proses baris dengan usable == "yes"
+  min_duration_sec: 0.0           # durasi minimum segmen (0 = tidak ada batas)
+  max_duration_sec: 30.0          # durasi maksimum segmen (sesuai flag long_gt30s)
+
+  # Folder keluaran (relatif dari akar repo)
+  output_dir: processed_audio

@@ -1,0 +1,30 @@
+# Konfigurasi normalisasi teks transkripsi
+# Dipakai oleh src/normalize_text.py
+#
+# Jalankan: python3 src/normalize_text.py --manifest data/manifest.csv
+
+text_normalization:
+  # --- Transformasi dasar ---
+  lowercase: true                 # ubah semua huruf ke huruf kecil
+  strip_extra_whitespace: true    # hilangkan spasi berlebih
+
+  # --- Tanda baca ---
+  remove_punctuation: true        # hapus tanda baca umum (. , ? ! " () dsb.)
+  keep_hyphen: false              # pertahankan tanda hubung antar-morfem
+                                  # (set true jika diperlukan untuk Bahasa Jawa)
+
+  # --- Tag khusus k05 ---
+  remove_bracket_tags: true       # hapus [NAMA], [NOISE], [MUSIC], [LAUGHTER], dsb.
+
+  # --- Karakter ---
+  unicode_normalize: true         # NFC normalization
+  normalize_apostrophe: true      # apostrof tipografis (', ') → standar (')
+  remove_nonlatin: true           # hapus karakter non-Latin (aksara asing, simbol)
+
+  # --- Tokenisasi (opsional) ---
+  char_tokenize: false            # hasilkan kolom text_chars (char-level, dipisah spasi)
+                                  # format: "s u g e n g | r a w u h"
+
+  # --- File ---
+  input_manifest: data/manifest.csv
+  output_manifest: data/manifest_normalized.csv
