@@ -13,7 +13,7 @@ Masalah yang diatasi (sesuai DATASET.md dan spesifikasi Fase 2):
        d. Pertahankan tanda hubung antar-morfem yang lazim dalam bahasa Jawa
           (opsional, dikendalikan flag --keep-hyphen).
   3. Penanganan tag khusus k05:
-       - [NAMA], [NOISE], [MUSIC], [LAUGHTER], [BREATH], [COUGH], dll. → dihapus
+       - [NAMA], [TRUNCATED], [UNCLEAR], [NOISE], [MUSIC], [LAUGHTER], dll. → dihapus
          (bukan ujaran yang perlu dikenali).
        - Konten dalam kurung siku yang berisi kata non-Latin (misalnya [*]) → dihapus.
   4. Penyeragaman karakter:
@@ -54,8 +54,8 @@ _RE_BRACKET_TAG = re.compile(r"\[[^\]]*\]")
 # Karakter tanda baca yang dihapus (tanpa apostrof, tanpa tanda hubung dulu)
 _PUNCT_REMOVE = str.maketrans({
     ".": " ", ",": " ", "?": " ", "!": " ",
-    "(": " ", ")": " ", '"': " ", """: " ", """: " ",
-    "«": " ", "»": " ", "…": "...", "–": " ", "—": " ",
+    "(": " ", ")": " ", '"': " ", "\u201c": " ", "\u201d": " ",
+    "\u00ab": " ", "\u00bb": " ", "\u2026": " ", "\u2013": " ", "\u2014": " ",
     # Karakter khas OCR/copy-paste
     "\u200b": "",  # zero-width space
     "\ufeff": "",  # BOM
@@ -82,7 +82,9 @@ def remove_bracket_tags(text: str) -> str:
 
 
 def unicode_normalize(text: str) -> str:
-    """NFC normalization + ganti karakter apostrof tipografis."""
+    """Normalisasi Unicode (hapus diakritik seperti é -> e) dan apostrof tipografis."""
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
     text = unicodedata.normalize("NFC", text)
     text = _RE_APOS.sub("'", text)
     return text

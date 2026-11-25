@@ -1,0 +1,8 @@
+Manifest input  : data/manifest.csv
+Output          : data/manifest_normalized.csv
+keep_hyphen     : False
+tokenize        : True
+Total baris     : 3110
+Usable+teks OK  : 3090
+Kosong setelah norm: 0
+Tidak usable/kosong: 20
