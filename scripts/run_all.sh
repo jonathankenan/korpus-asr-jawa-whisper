@@ -51,6 +51,7 @@ SKIP_FETCH="${SKIP_FETCH:-0}"
 SKIP_PREPROCESS="${SKIP_PREPROCESS:-0}"
 SKIP_TRAIN="${SKIP_TRAIN:-$DEFAULT_SKIP_TRAIN}"
 FORCE_CPU_TRAIN="${FORCE_CPU_TRAIN:-0}"
+RUN_DEMO="${RUN_DEMO:-1}"
 
 if [ "$FORCE_CPU_TRAIN" = "1" ]; then
   SKIP_TRAIN="0"
@@ -64,6 +65,7 @@ echo "  Folds       : $FOLDS"
 echo "  Limit/fold  : $LIMIT (0 = semua)"
 echo "  Skip install: $SKIP_INSTALL"
 echo "  Skip train  : $SKIP_TRAIN"
+echo "  Run demo    : $RUN_DEMO"
 echo "=========================="
 
 # 1. Ambil korpus mentah jika belum ada
@@ -118,5 +120,15 @@ else
 fi
 
 echo "[6/6] Selesai! Ringkasan hasil tersimpan di folder results/."
-echo "      Untuk menjalankan demo web, jalankan: python demo/app.py"
-echo "      Lalu buka http://127.0.0.1:7860 di browser saat siap."
+if [ "$RUN_DEMO" = "1" ]; then
+  DEMO_MODEL="$MODEL"
+  if [ "$SKIP_TRAIN" = "0" ] && [ -d "models/whisper-jv-fold${FIRST_FOLD}" ]; then
+    DEMO_MODEL="models/whisper-jv-fold${FIRST_FOLD}"
+  fi
+  echo "[6/6] Menjalankan demo web Gradio dengan model: $DEMO_MODEL"
+  echo "      Buka http://127.0.0.1:7860 di browser saat siap (tekan Ctrl+C untuk berhenti)."
+  "$PYTHON_BIN" demo/app.py --model "$DEMO_MODEL" --num-beams "$NUM_BEAMS"
+else
+  echo "      Untuk menjalankan demo web nanti: python demo/app.py --model $MODEL"
+  echo "      Lalu buka http://127.0.0.1:7860 di browser saat siap."
+fi
