@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 K11_REPO=https://github.com/rlukassa/Korpus_Bahasa_Jawa.git
 K05_REPO=https://github.com/angelinaefrina/Korpus_Bahasa_Jawa.git
 K11_COMMIT=7f1c3efc10e03991b6594fdc80f46a63e50e2bec
-K05_COMMIT=c4fc1e0d5a52a8bae7176b2eada08ced3774a9fc
+K05_COMMIT=20047caaeede14e6781c7608baaf2e11cdc67fa3
 
 fetch() {
   [ -d "$1" ] || git clone "$2" "$1"

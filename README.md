@@ -10,10 +10,10 @@ Danendra Shafi Athallah (13523136), Jonathan Kenan Budianto (13523139), Jovandra
 
 ## Sumber data
 
-| Singkatan | Korpus | Repo | Commit yang dipakai |
-|---|---|---|---|
-| `corpus_k11` | Korpus Bahasa Jawa kelompok ini (Fase 1) | https://github.com/rlukassa/Korpus_Bahasa_Jawa | `7f1c3efc10e03991b6594fdc80f46a63e50e2bec` |
-| `corpus_k05` | Korpus Bahasa Jawa kelompok 5 | https://github.com/angelinaefrina/Korpus_Bahasa_Jawa | `c4fc1e0d5a52a8bae7176b2eada08ced3774a9fc` |
+| Singkatan | Korpus | Repo |
+|---|---|---|
+| `corpus_k11` | Korpus Bahasa Jawa kelompok ini (Fase 1) | https://github.com/rlukassa/Korpus_Bahasa_Jawa |
+| `corpus_k05` | Korpus Bahasa Jawa kelompok 5 | https://github.com/angelinaefrina/Korpus_Bahasa_Jawa |
 
 Penutur kelompok 5 (S01 sampai S10 pada repo asalnya) dinomori ulang menjadi S11 sampai S20 pada data gabungan. Pemetaannya akan dicatat di `data/id_mapping.csv`.
 
@@ -26,7 +26,7 @@ cd korpus-asr-jawa-whisper
 ./scripts/fetch_data.sh
 ```
 
-Skrip meng-clone kedua korpus ke `corpus_k11/` dan `corpus_k05/` lalu mengunci keduanya pada commit di tabel di atas. Ukurannya sekitar 370 MB dan 570 MB.
+Skrip meng-clone kedua korpus ke `corpus_k11/` dan `corpus_k05/` lalu mengunci keduanya pada versi tertentu agar semua anggota memakai data yang sama. Ukurannya sekitar 370 MB dan 570 MB.
 
 Setelah data terambil, buat manifest gabungan dan split:
 
