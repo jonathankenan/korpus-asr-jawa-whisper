@@ -122,7 +122,9 @@ def launch_gradio(demo_engine: WhisperJavaneseDemo, port: int = 7860) -> None:
         title="Demo ASR Bahasa Jawa (Whisper)",
         description=f"Model aktif: `{demo_engine.model_id}` | Device: `{demo_engine.device}`",
     )
-    ui.launch(server_port=port)
+    # Saat siap, buka URL http://127.0.0.1:7860 di browser
+    print(f"Demo web siap! Buka http://127.0.0.1:{port} di browser Anda.")
+    ui.launch(server_name="127.0.0.1", server_port=port)
 
 
 def main():

@@ -118,3 +118,5 @@ else
 fi
 
 echo "[6/6] Selesai! Ringkasan hasil tersimpan di folder results/."
+echo "      Untuk menjalankan demo web, jalankan: python demo/app.py"
+echo "      Lalu buka http://127.0.0.1:7860 di browser saat siap."
