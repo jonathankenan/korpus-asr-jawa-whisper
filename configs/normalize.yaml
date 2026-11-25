@@ -14,7 +14,7 @@ text_normalization:
                                   # (set true jika diperlukan untuk Bahasa Jawa)
 
   # --- Tag khusus k05 ---
-  remove_bracket_tags: true       # hapus [NAMA], [NOISE], [MUSIC], [LAUGHTER], dsb.
+  remove_bracket_tags: true       # hapus [NAMA], [TRUNCATED], [UNCLEAR], [NOISE], dsb.
 
   # --- Karakter ---
   unicode_normalize: true         # NFC normalization
