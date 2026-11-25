@@ -1,0 +1,33 @@
+# Konfigurasi inferensi dan decoding Whisper untuk ASR Bahasa Jawa
+# Sesuai SPEC.md bagian 5A & 6
+#
+# Jalankan pada fold test set:
+#   python src/infer.py --config configs/inference.yaml --fold 1
+#
+# Jalankan pada satu file audio:
+#   python src/infer.py --config configs/inference.yaml --audio path/to/audio.wav
+
+model:
+  model_name_or_path: openai/whisper-small   # ganti ke models/whisper-jv-fold1 setelah fine-tuning
+  language: javanese
+  task: transcribe
+  device: auto                               # auto | cuda | cpu
+
+decoding:
+  num_beams: 5                               # 1 = greedy decoding, >1 = beam search
+  temperature: 0.0
+  max_new_tokens: 225
+  no_repeat_ngram_size: 3
+
+data:
+  manifest_path: data/manifest_normalized.csv
+  fallback_manifest: data/manifest.csv
+  splits_dir: data/splits
+  processed_audio_dir: processed_audio
+  split_name: test                           # test | val
+  sample_rate: 16000
+  chunk_length_sec: 30.0                     # panjang potongan untuk audio panjang
+
+output:
+  results_dir: results
+  tag: pretrained                            # label eksperimen, misal: pretrained | finetuned
