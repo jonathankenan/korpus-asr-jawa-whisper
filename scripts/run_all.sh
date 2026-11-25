@@ -12,6 +12,14 @@ cd "$(dirname "$0")/.."
 
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 command -v "$PYTHON_BIN" >/dev/null 2>&1 || PYTHON_BIN="python"
+SKIP_INSTALL="${SKIP_INSTALL:-0}"
+
+# 0. Install dependensi Python & Gradio sebelum deteksi CUDA
+if [ "$SKIP_INSTALL" = "0" ]; then
+  echo "[0/6] Menginstall requirements.txt dan gradio..."
+  "$PYTHON_BIN" -m pip install -q -r requirements.txt
+  "$PYTHON_BIN" -m pip install -q gradio
+fi
 
 # Deteksi CUDA GPU
 HAS_CUDA="$("$PYTHON_BIN" -c "import torch; print(1 if torch.cuda.is_available() else 0)" 2>/dev/null || echo 0)"
@@ -49,12 +57,13 @@ if [ "$FORCE_CPU_TRAIN" = "1" ]; then
 fi
 
 echo "=== Konfigurasi Runner ==="
-echo "  Python     : $PYTHON_BIN"
-echo "  Model      : $MODEL"
-echo "  Num beams  : $NUM_BEAMS"
-echo "  Folds      : $FOLDS"
-echo "  Limit/fold : $LIMIT (0 = semua)"
-echo "  Skip train : $SKIP_TRAIN"
+echo "  Python      : $PYTHON_BIN"
+echo "  Model       : $MODEL"
+echo "  Num beams   : $NUM_BEAMS"
+echo "  Folds       : $FOLDS"
+echo "  Limit/fold  : $LIMIT (0 = semua)"
+echo "  Skip install: $SKIP_INSTALL"
+echo "  Skip train  : $SKIP_TRAIN"
 echo "=========================="
 
 # 1. Ambil korpus mentah jika belum ada
