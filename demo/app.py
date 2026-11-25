@@ -82,6 +82,7 @@ class WhisperJavaneseDemo:
         self.model.generation_config.language = "javanese"
         self.model.generation_config.task = "transcribe"
         self.model.generation_config.forced_decoder_ids = None
+        self.model.generation_config.max_length = None
 
     def transcribe_file(self, wav_path: Path) -> Tuple[str, str]:
         audio = load_wav_16k(wav_path)
