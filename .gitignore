@@ -1,5 +1,6 @@
 corpus_k11/
 corpus_k05/
+processed_audio/
 models/
 checkpoints/
 *.wav
