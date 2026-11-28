@@ -106,6 +106,23 @@ Berkas: `data/splits/speaker_folds.csv` (peran tiap penutur pada tiap fold) dan 
 
 Menit pada tabel dihitung dari segmen berteks dan berdurasi positif, sebelum aturan filter apa pun.
 
+## Evaluasi pendamping
+
+Hasil utama memakai semua segmen usable (3.090). Sebagai pembanding, `src/evaluate.py` juga menghitung **subset bersih** yang mengeluarkan segmen berikut (satu segmen bisa punya beberapa alasan; aturan di `src/data.py`):
+
+| Alasan | Segmen |
+|---|---|
+| Durasi < 1 s | 257 |
+| Berlabel Indonesia atau Inggris (k11) | 185 |
+| Laju teks > 25 karakter/s (kemungkinan tidak selaras) | 33 |
+| Referensi ber-tag `[...]` | 31 |
+| Bertanda hening digital atau halusinasi ASR | 21 |
+| Penutur membacakan pertanyaan panduan | 12 |
+| Referensi memuat angka | 8 |
+| **Tersisa di subset bersih** | **2.592** |
+
+Label dialek kedua korpus berbeda konvensi, sehingga analisis dialek memakai label tingkat penutur (`data/speakers.csv`) yang dikelompokkan menjadi Timuran, Semarangan, Solo-Jogja (Mataraman), Campuran, dan Tidak dirinci.
+
 ## Keterbatasan
 
 - Hanya 4 penutur test per fold, sehingga skor per fold sangat dipengaruhi penutur tertentu. Laporkan rata-rata dan simpangan baku antar fold, dan sebaiknya juga skor per penutur.
@@ -123,4 +140,7 @@ Menit pada tabel dihitung dari segmen berteks dan berdurasi positif, sebelum atu
 ./scripts/fetch_data.sh
 python3 src/build_manifest.py
 python3 src/make_splits.py
+python3 src/normalize_text.py --tokenize
 ```
+
+Jika korpus sudah ada di folder lain pada commit yang sama, set `CORPUS_K11` dan `CORPUS_K05` sebagai pengganti `fetch_data.sh`.

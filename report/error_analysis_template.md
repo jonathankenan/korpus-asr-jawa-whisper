@@ -1,6 +1,6 @@
-# Templat Laporan Analisis Kesalahan (SPEC.md §5C)
+# Templat Laporan Analisis Kesalahan (spesifikasi Fase 2 §5C)
 
-Gunakan templat ini untuk merangkum temuan dari `results/error_analysis_<tag>.md`:
+Gunakan templat ini untuk merangkum temuan dari `results/analysis/<eksperimen>.md` dan `results/summary.md`:
 
 ## 1. Kata yang Sering Salah Dikenali
 - **Substitusi vokal/dialek** (misal: `o` ↔ `a` pada *sego* / *sega*, *piro* / *pira*).
