@@ -11,8 +11,10 @@ python demo/app.py --model openai/whisper-small
 ```
 Atau arahkan ke model hasil fine-tuning:
 ```bash
-python demo/app.py --model models/whisper-jv-fold1
+python demo/app.py --model models/small-ft/fold1
 ```
+
+Demo memakai preprocessing dan decoding yang sama dengan evaluasi (`configs/inference.yaml`). Masukan harus berupa file WAV.
 
 ### 2. Mode CLI (Tanpa Gradio)
 ```bash

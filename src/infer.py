@@ -1,284 +1,215 @@
-"""Skrip inferensi dan decoding ASR Bahasa Jawa dengan Whisper.
+"""Inferensi dan decoding ASR Bahasa Jawa dengan Whisper.
 
-Mendukung dua mode:
-  1. Mode dataset/fold: menghasilkan file CSV prediksi pada subset test/val.
-  2. Mode audio tunggal (--audio): mentranskripsikan satu file WAV langsung.
+Mode:
+  1. Dataset  : menulis prediksi ke results/predictions/<exp>/fold<k>.csv.
+                `--fold all` mentranskripsi test set kelima fold sekaligus (dipakai untuk
+                model pretrained, karena test set antar fold tidak beririsan).
+  2. Satu file: `--audio file.wav` mencetak transkripsi.
+
+Proses dapat dilanjutkan: segmen yang sudah ada di CSV dilewati. Konfigurasi tiap file
+prediksi dicatat di fold<k>.json; menjalankan ulang dengan konfigurasi berbeda ditolak
+kecuali memakai --overwrite.
 
 Contoh:
-  python src/infer.py --config configs/inference.yaml --fold 1 --dry-run
-  python src/infer.py --config configs/inference.yaml --fold 1 --tag pretrained
-  python src/infer.py --model models/whisper-jv-fold1 --audio sample.wav
+  python src/infer.py --exp tiny-pretrained --model openai/whisper-tiny --fold all
+  python src/infer.py --exp tiny-ft --model models/tiny-ft/fold1 --fold 1
+  python src/infer.py --model openai/whisper-small --audio sample.wav
 """
 
 import argparse
 import csv
-import re
-import struct
+import json
+import platform
 import time
-import unicodedata
-import wave
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 import numpy as np
 import torch
+import transformers
 import yaml
-from transformers import WhisperForConditionalGeneration, WhisperProcessor
 
-try:
-    from normalize_text import normalize as normalize_text
-except Exception:
-    def normalize_text(text: str) -> str:
-        text = unicodedata.normalize("NFKD", text or "")
-        text = "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
-        text = re.sub(r"\[[^\]]*\]", " ", text).lower()
-        text = re.sub(r"[^a-z0-9'\- ]", " ", text)
-        return re.sub(r"\s+", " ", text).strip()
+from audio import load_segment, load_wav, peak_normalize
+from data import FOLDS, load_manifest, split_map, test_fold_by_speaker
+from model import load_whisper, resolve_model
+from normalize_text import normalize
 
 ROOT = Path(__file__).resolve().parent.parent
+FIELDS = ["utt_id", "speaker", "fold", "split", "pred_raw", "pred_norm"]
 
 
-def load_wav(
-    audio_path: Path,
-    start_sec: Optional[float] = None,
-    end_sec: Optional[float] = None,
-    target_sr: int = 16_000,
-) -> np.ndarray:
-    """Baca file WAV (atau segmen tertentu) sebagai float32 mono 16 kHz."""
-    with wave.open(str(audio_path), "rb") as wf:
-        sr = wf.getframerate()
-        nc = wf.getnchannels()
-        sw = wf.getsampwidth()
-        n_frames = wf.getnframes()
-
-        s_frame = max(0, int(start_sec * sr)) if start_sec is not None else 0
-        e_frame = min(n_frames, int(end_sec * sr)) if end_sec is not None else n_frames
-        wf.setpos(s_frame)
-        raw = wf.readframes(max(0, e_frame - s_frame))
-
-    if not raw:
-        return np.zeros(0, dtype=np.float32)
-
-    if sw == 2:
-        arr = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-    elif sw == 1:
-        arr = (np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
-    elif sw == 4:
-        arr = np.frombuffer(raw, dtype=np.int32).astype(np.float32) / 2147483648.0
-    else:
-        fmt = f"<{len(raw) // sw}h"
-        arr = np.array(struct.unpack(fmt, raw), dtype=np.float32) / 32768.0
-
-    if nc > 1:
-        arr = arr.reshape(-1, nc).mean(axis=1)
-
-    if sr != target_sr and len(arr) > 0:
-        n_out = int(round(len(arr) * target_sr / sr))
-        x_old = np.linspace(0.0, 1.0, num=len(arr), endpoint=False)
-        x_new = np.linspace(0.0, 1.0, num=n_out, endpoint=False)
-        arr = np.interp(x_new, x_old, arr).astype(np.float32)
-
-    return arr
+def transcribe_batch(chunks: List[np.ndarray], processor, model, device: str,
+                     gen_kwargs: Dict, sample_rate: int) -> List[str]:
+    """Transkripsikan sekumpulan potongan audio (masing-masing paling lama 30 detik)."""
+    inputs = processor.feature_extractor(
+        chunks, sampling_rate=sample_rate, return_tensors="pt", return_attention_mask=True
+    )
+    with torch.inference_mode():
+        ids = model.generate(
+            inputs.input_features.to(device),
+            attention_mask=inputs.attention_mask.to(device),
+            **gen_kwargs,
+        )
+    return [t.strip() for t in processor.tokenizer.batch_decode(ids, skip_special_tokens=True)]
 
 
-def transcribe_array(
-    audio: np.ndarray,
-    processor: WhisperProcessor,
-    model: WhisperForConditionalGeneration,
-    device: str,
-    sr: int = 16_000,
-    chunk_sec: float = 30.0,
-    num_beams: int = 5,
-    max_new_tokens: int = 225,
-    no_repeat_ngram_size: int = 3,
-    temperature: float = 0.0,
-) -> str:
-    """Dekodekan array audio (dengan pemotongan otomatis jika > chunk_sec)."""
-    if len(audio) == 0:
-        return ""
-
-    chunk_samples = int(chunk_sec * sr)
-    texts: List[str] = []
-
-    for start in range(0, len(audio), chunk_samples):
-        chunk = audio[start : start + chunk_samples]
-        inputs = processor(chunk, sampling_rate=sr, return_tensors="pt")
-        input_features = inputs.input_features.to(device)
-
-        with torch.no_grad():
-            predicted_ids = model.generate(
-                input_features,
-                num_beams=num_beams,
-                max_new_tokens=max_new_tokens,
-                no_repeat_ngram_size=no_repeat_ngram_size,
-                temperature=temperature,
-            )
-        decoded = processor.batch_decode(predicted_ids, skip_special_tokens=True)[0].strip()
-        if decoded:
-            texts.append(decoded)
-
-    return " ".join(texts).strip()
+def transcribe_many(audios: List[np.ndarray], processor, model, device: str, gen_kwargs: Dict,
+                    sample_rate: int = 16_000, chunk_sec: float = 30.0) -> List[str]:
+    """Transkripsikan beberapa audio; audio lebih panjang dari chunk_sec dipotong berurutan."""
+    size = int(chunk_sec * sample_rate)
+    chunks, owner = [], []
+    for i, audio in enumerate(audios):
+        for start in range(0, len(audio), size):
+            chunks.append(audio[start:start + size])
+            owner.append(i)
+    texts: List[List[str]] = [[] for _ in audios]
+    if chunks:
+        for i, text in zip(owner, transcribe_batch(chunks, processor, model, device,
+                                                    gen_kwargs, sample_rate)):
+            if text:
+                texts[i].append(text)
+    return [" ".join(t) for t in texts]
 
 
-def resolve_device(pref: str) -> str:
-    if pref == "auto":
-        return "cuda" if torch.cuda.is_available() else "cpu"
-    return pref
-
-
-def load_split_rows(manifest_path: Path, split_path: Path, split_name: str) -> List[Dict[str, str]]:
-    with open(split_path, encoding="utf-8", newline="") as f:
-        split_map = {r["utt_id"]: r["split"] for r in csv.DictReader(f)}
-
-    rows: List[Dict[str, str]] = []
-    with open(manifest_path, encoding="utf-8", newline="") as f:
-        for row in csv.DictReader(f):
-            if row.get("usable", "yes") != "yes":
-                continue
-            if split_map.get(row["utt_id"]) == split_name:
-                rows.append(row)
-    return rows
+def parse_peak(value, default):
+    if value is None:
+        return default
+    return None if str(value).lower() in ("none", "off") else float(value)
 
 
 def main():
     parser = argparse.ArgumentParser(description="Inferensi Whisper ASR Bahasa Jawa")
     parser.add_argument("--config", default="configs/inference.yaml")
-    parser.add_argument("--model", default=None, help="Override nama/path model")
-    parser.add_argument("--fold", type=int, default=1, choices=[1, 2, 3, 4, 5])
-    parser.add_argument("--split", default=None, choices=["train", "val", "test"])
-    parser.add_argument("--audio", default=None, help="Path satu file WAV untuk inferensi tunggal")
-    parser.add_argument("--tag", default=None, help="Tag nama file keluaran")
+    parser.add_argument("--model", default=None, help="Nama Hugging Face atau folder model")
+    parser.add_argument("--exp", default=None, help="Nama eksperimen (folder keluaran)")
+    parser.add_argument("--fold", default="all", help="1-5 atau all")
+    parser.add_argument("--split", default="test", choices=["train", "val", "test"])
+    parser.add_argument("--audio", default=None, help="Satu file WAV untuk inferensi tunggal")
     parser.add_argument("--num-beams", type=int, default=None)
-    parser.add_argument("--limit", type=int, default=0, help="Batasi N segmen (0 = semua)")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Verifikasi konfigurasi & data tanpa memuat bobot model")
+    parser.add_argument("--batch-size", type=int, default=None)
+    parser.add_argument("--peak-dbfs", default=None, help="Angka dBFS, atau 'none'")
+    parser.add_argument("--limit", type=int, default=0, help="Batasi N segmen per fold (uji cepat)")
+    parser.add_argument("--overwrite", action="store_true", help="Buang prediksi lama")
+    parser.add_argument("--dry-run", action="store_true", help="Cek data tanpa memuat model")
     args = parser.parse_args()
 
     with open(ROOT / args.config, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
+    m_cfg, dec, a_cfg = cfg["model"], cfg["decoding"], cfg["audio"]
 
-    m_cfg = cfg["model"]
-    dec_cfg = cfg["decoding"]
-    d_cfg = cfg["data"]
-    o_cfg = cfg["output"]
-
-    model_id = args.model or m_cfg["model_name_or_path"]
-    device = resolve_device(m_cfg.get("device", "auto"))
-    num_beams = args.num_beams or dec_cfg["num_beams"]
-    split_name = args.split or d_cfg["split_name"]
-    tag = args.tag or o_cfg["tag"]
+    model_name = args.model or m_cfg["model_name_or_path"]
+    device = ("cuda" if torch.cuda.is_available() else "cpu") if m_cfg["device"] == "auto" else m_cfg["device"]
+    num_beams = args.num_beams or dec["num_beams"]
+    batch_size = args.batch_size or cfg["data"]["batch_size"]
+    peak_dbfs = parse_peak(args.peak_dbfs, a_cfg["peak_dbfs"])
+    sample_rate, chunk_sec = a_cfg["sample_rate"], a_cfg["chunk_length_sec"]
+    gen_kwargs = {
+        "language": m_cfg["language"],
+        "task": m_cfg["task"],
+        "num_beams": num_beams,
+        "do_sample": False,
+        "max_new_tokens": dec["max_new_tokens"],
+        "no_repeat_ngram_size": dec["no_repeat_ngram_size"],
+    }
 
     if args.audio:
-        audio_path = Path(args.audio)
-        if not audio_path.is_absolute():
-            audio_path = ROOT / audio_path
-        print(f"Mode audio tunggal: {audio_path} | Model: {model_id} | Device: {device}")
-        if args.dry_run:
-            print("Dry-run selesai.")
-            return
-        processor = WhisperProcessor.from_pretrained(
-            model_id, language=m_cfg["language"], task=m_cfg["task"]
-        )
-        model = WhisperForConditionalGeneration.from_pretrained(model_id).to(device)
-        model.eval()
-        model.generation_config.language = m_cfg["language"]
-        model.generation_config.task = m_cfg["task"]
-        model.generation_config.forced_decoder_ids = None
-
-        audio = load_wav(audio_path, target_sr=d_cfg["sample_rate"])
-        text = transcribe_array(
-            audio, processor, model, device,
-            sr=d_cfg["sample_rate"],
-            chunk_sec=d_cfg["chunk_length_sec"],
-            num_beams=num_beams,
-            max_new_tokens=dec_cfg["max_new_tokens"],
-            no_repeat_ngram_size=dec_cfg["no_repeat_ngram_size"],
-            temperature=dec_cfg["temperature"],
-        )
-        print(f"Transkripsi     : {text}")
-        print(f"Normalisasi     : {normalize_text(text)}")
+        processor, model = load_whisper(model_name, m_cfg["language"], m_cfg["task"])
+        model.to(device).eval()
+        audio = load_wav(Path(args.audio), target_sr=sample_rate)
+        if peak_dbfs is not None:
+            audio = peak_normalize(audio, peak_dbfs)
+        text = transcribe_many([audio], processor, model, device, gen_kwargs, sample_rate, chunk_sec)[0]
+        print(f"Transkripsi : {text}")
+        print(f"Normalisasi : {normalize(text)}")
         return
 
-    manifest_path = ROOT / d_cfg["manifest_path"]
-    if not manifest_path.exists():
-        manifest_path = ROOT / d_cfg["fallback_manifest"]
-    split_path = ROOT / d_cfg["splits_dir"] / f"fold{args.fold}.csv"
-    rows = load_split_rows(manifest_path, split_path, split_name)
-    if args.limit:
-        rows = rows[: args.limit]
+    if not args.exp:
+        raise SystemExit("--exp wajib diisi untuk inferensi dataset.")
 
-    out_dir = ROOT / o_cfg["results_dir"]
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_csv = out_dir / f"predictions_fold{args.fold}_{tag}.csv"
+    manifest = load_manifest()
+    if args.fold == "all":
+        if args.split != "test":
+            raise SystemExit("--fold all hanya untuk --split test.")
+        fold_of = test_fold_by_speaker()
+        jobs = {k: [r for r in manifest if fold_of[r["speaker"]] == k] for k in FOLDS}
+    else:
+        k = int(args.fold)
+        smap = split_map(k)
+        jobs = {k: [r for r in manifest if smap.get(r["utt_id"]) == args.split]}
 
-    print(f"Fold {args.fold} ({split_name}) | {len(rows)} segmen | Model: {model_id} | beams={num_beams}")
-    print(f"Keluaran: {out_csv}")
-    if args.dry_run:
-        print("Dry-run selesai: data dan konfigurasi inferensi valid.")
-        return
+    out_dir = ROOT / cfg["output"]["predictions_dir"] / args.exp
+    revision = resolve_model(model_name)[1].get("revision", "")
+    processor = model = None
 
-    processor = WhisperProcessor.from_pretrained(
-        model_id, language=m_cfg["language"], task=m_cfg["task"]
-    )
-    model = WhisperForConditionalGeneration.from_pretrained(model_id).to(device)
-    model.eval()
-    model.generation_config.language = m_cfg["language"]
-    model.generation_config.task = m_cfg["task"]
-    model.generation_config.forced_decoder_ids = None
+    for fold, rows in jobs.items():
+        if args.limit:
+            rows = rows[:args.limit]
+        out_csv = out_dir / f"fold{fold}.csv"
+        meta_path = out_dir / f"fold{fold}.json"
+        signature = {
+            "model": Path(model_name).as_posix(), "revision": revision, "split": args.split,
+            "num_beams": num_beams, "max_new_tokens": dec["max_new_tokens"],
+            "no_repeat_ngram_size": dec["no_repeat_ngram_size"], "peak_dbfs": peak_dbfs,
+            "chunk_length_sec": chunk_sec, "language": m_cfg["language"], "task": m_cfg["task"],
+        }
+        done, meta = set(), {}
+        if out_csv.exists() and not args.overwrite:
+            meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+            if meta.get("signature") != signature:
+                raise SystemExit(f"{out_csv} dibuat dengan konfigurasi lain. Pakai --exp lain atau --overwrite.")
+            with open(out_csv, encoding="utf-8", newline="") as f:
+                done = {r["utt_id"] for r in csv.DictReader(f)}
+        todo = [r for r in rows if r["utt_id"] not in done]
+        print(f"[{args.exp}] fold {fold} ({args.split}): {len(rows)} segmen, "
+              f"{len(done)} sudah ada, {len(todo)} dikerjakan", flush=True)
+        if args.dry_run or not todo:
+            continue
 
-    proc_dir = ROOT / d_cfg["processed_audio_dir"]
-    results = []
-    t0 = time.time()
+        if model is None:
+            processor, model = load_whisper(model_name, m_cfg["language"], m_cfg["task"])
+            model.to(device).eval()
 
-    for idx, row in enumerate(rows, 1):
-        utt_id = row["utt_id"]
-        spk = row["speaker"]
-        pre_wav = proc_dir / spk / f"{utt_id}.wav"
-        if pre_wav.exists():
-            audio = load_wav(pre_wav, target_sr=d_cfg["sample_rate"])
-        else:
-            audio = load_wav(
-                ROOT / row["audio_path"],
-                start_sec=float(row["start"]),
-                end_sec=float(row["end"]),
-                target_sr=d_cfg["sample_rate"],
-            )
-
-        pred_raw = transcribe_array(
-            audio, processor, model, device,
-            sr=d_cfg["sample_rate"],
-            chunk_sec=d_cfg["chunk_length_sec"],
-            num_beams=num_beams,
-            max_new_tokens=dec_cfg["max_new_tokens"],
-            no_repeat_ngram_size=dec_cfg["no_repeat_ngram_size"],
-            temperature=dec_cfg["temperature"],
-        )
-        ref_raw = row.get("text_raw", "")
-        ref_norm = row.get("text_norm") or normalize_text(ref_raw)
-        pred_norm = normalize_text(pred_raw)
-
-        results.append({
-            "utt_id": utt_id,
-            "speaker": spk,
-            "group": row.get("group", ""),
-            "dialect": row.get("dialect", ""),
-            "speaker_status": row.get("speaker_status", ""),
-            "duration": row.get("duration", ""),
-            "ref_raw": ref_raw,
-            "ref_norm": ref_norm,
-            "pred_raw": pred_raw,
-            "pred_norm": pred_norm,
-        })
-        if idx % 25 == 0 or idx == len(rows):
-            elapsed = time.time() - t0
-            print(f"  [{idx}/{len(rows)}] {elapsed:.1f}s", end="\r")
-
-    fieldnames = list(results[0].keys()) if results else []
-    with open(out_csv, "w", encoding="utf-8", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=fieldnames)
-        w.writeheader()
-        w.writerows(results)
-    print(f"\nSelesai: {len(results)} prediksi disimpan ke {out_csv}")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        todo.sort(key=lambda r: float(r["duration"]))  # durasi mirip -> decoding batch lebih cepat
+        audio_sec = meta.get("audio_seconds", 0.0)
+        wall_sec = meta.get("wall_seconds", 0.0)
+        append = bool(done)
+        with open(out_csv, "a" if append else "w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=FIELDS)
+            if not append:
+                writer.writeheader()
+            t_fold = time.time()
+            for i in range(0, len(todo), batch_size):
+                batch = todo[i:i + batch_size]
+                t0 = time.time()
+                audios = [load_segment(r, peak_dbfs, sample_rate) for r in batch]
+                preds = transcribe_many(audios, processor, model, device, gen_kwargs,
+                                        sample_rate, chunk_sec)
+                wall_sec += time.time() - t0
+                audio_sec += sum(len(a) for a in audios) / sample_rate
+                for row, pred in zip(batch, preds):
+                    writer.writerow({
+                        "utt_id": row["utt_id"], "speaker": row["speaker"], "fold": fold,
+                        "split": args.split, "pred_raw": pred, "pred_norm": normalize(pred),
+                    })
+                f.flush()
+                meta = {
+                    "signature": signature,
+                    "audio_seconds": round(audio_sec, 1),
+                    "wall_seconds": round(wall_sec, 1),
+                    "batch_size": batch_size,
+                    "device": device if device == "cpu" else torch.cuda.get_device_name(0),
+                    "machine": platform.processor(),
+                    "torch": torch.__version__,
+                    "transformers": transformers.__version__,
+                }
+                meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+                n = min(i + batch_size, len(todo))
+                if n == len(todo) or (i // batch_size) % 10 == 0:
+                    rate = n / (time.time() - t_fold)
+                    print(f"    {n}/{len(todo)} segmen | {rate:.2f} segmen/s | "
+                          f"sisa ~{(len(todo) - n) / rate / 60:.0f} menit", flush=True)
+        print(f"  selesai: {out_csv}", flush=True)
 
 
 if __name__ == "__main__":

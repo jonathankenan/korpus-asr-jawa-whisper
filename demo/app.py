@@ -1,150 +1,103 @@
-"""Demo sistem ASR Bahasa Jawa dengan Whisper (CLI & Gradio Web UI).
+"""Demo sistem ASR Bahasa Jawa dengan Whisper (CLI & web Gradio), spesifikasi Fase 2 §8.
 
-Sesuai SPEC.md bagian 8 (Demonstrasi sistem):
-  Memasukkan audio Bahasa Jawa (.wav) dan menampilkan hasil transkripsi model.
+Memakai pemuat model, preprocessing, dan decoding yang sama dengan evaluasi
+(src/ dan configs/inference.yaml).
 
 Cara menjalankan:
-  1. Mode Web UI (jika gradio terpasang):
-       python demo/app.py --model openai/whisper-small
-  2. Mode CLI satu file:
-       python demo/app.py --audio path/to/audio.wav --model openai/whisper-small
-  3. Verifikasi tanpa memuat bobot model:
-       python demo/app.py --dry-run
+  1. Web (butuh gradio):      python demo/app.py --model models/small-ft/fold1
+  2. Satu file (CLI):         python demo/app.py --audio path/ke/audio.wav --model openai/whisper-small
+  3. Cek skrip tanpa model:   python demo/app.py --dry-run
 """
 
 import argparse
-import re
-import struct
-import unicodedata
-import wave
+import sys
 from pathlib import Path
 from typing import Tuple
 
-import numpy as np
-import torch
-from transformers import WhisperForConditionalGeneration, WhisperProcessor
-
 ROOT = Path(__file__).resolve().parent.parent
-TARGET_SR = 16_000
+sys.path.insert(0, str(ROOT / "src"))
 
+import torch  # noqa: E402
+import yaml  # noqa: E402
 
-def normalize_output(text: str) -> str:
-    """Normalisasi ringan untuk tampilan hasil transkripsi."""
-    text = unicodedata.normalize("NFKD", text or "")
-    text = "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
-    text = re.sub(r"\[[^\]]*\]", " ", text).lower()
-    text = re.sub(r"[^a-z0-9'\- ]", " ", text)
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def load_wav_16k(path: Path) -> np.ndarray:
-    """Baca file WAV menjadi array float32 mono 16 kHz."""
-    with wave.open(str(path), "rb") as wf:
-        sr = wf.getframerate()
-        nc = wf.getnchannels()
-        sw = wf.getsampwidth()
-        raw = wf.readframes(wf.getnframes())
-
-    if sw == 2:
-        arr = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-    elif sw == 1:
-        arr = (np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
-    elif sw == 4:
-        arr = np.frombuffer(raw, dtype=np.int32).astype(np.float32) / 2147483648.0
-    else:
-        fmt = f"<{len(raw) // sw}h"
-        arr = np.array(struct.unpack(fmt, raw), dtype=np.float32) / 32768.0
-
-    if nc > 1:
-        arr = arr.reshape(-1, nc).mean(axis=1)
-
-    if sr != TARGET_SR and len(arr) > 0:
-        n_out = int(round(len(arr) * TARGET_SR / sr))
-        x_old = np.linspace(0.0, 1.0, num=len(arr), endpoint=False)
-        x_new = np.linspace(0.0, 1.0, num=n_out, endpoint=False)
-        arr = np.interp(x_new, x_old, arr).astype(np.float32)
-
-    return arr
+from audio import load_wav, peak_normalize  # noqa: E402
+from infer import transcribe_many  # noqa: E402
+from model import load_whisper  # noqa: E402
+from normalize_text import normalize  # noqa: E402
 
 
 class WhisperJavaneseDemo:
-    """Wrapper demo untuk transkripsi audio Bahasa Jawa dengan Whisper."""
+    """Transkripsi file WAV Bahasa Jawa dengan model pretrained atau hasil fine-tuning."""
 
-    def __init__(self, model_id: str = "openai/whisper-small", num_beams: int = 5):
+    def __init__(self, model_id: str, num_beams: int = 0):
+        with open(ROOT / "configs" / "inference.yaml", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+        self.audio_cfg = cfg["audio"]
         self.model_id = model_id
-        self.num_beams = num_beams
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.processor = WhisperProcessor.from_pretrained(
-            model_id, language="javanese", task="transcribe"
-        )
-        self.model = WhisperForConditionalGeneration.from_pretrained(model_id).to(self.device)
-        self.model.eval()
-        self.model.generation_config.language = "javanese"
-        self.model.generation_config.task = "transcribe"
-        self.model.generation_config.forced_decoder_ids = None
-        self.model.generation_config.max_length = None
+        self.processor, self.model = load_whisper(model_id, cfg["model"]["language"], cfg["model"]["task"])
+        self.model.to(self.device).eval()
+        self.gen_kwargs = {
+            "language": cfg["model"]["language"],
+            "task": cfg["model"]["task"],
+            "num_beams": num_beams or cfg["decoding"]["num_beams"],
+            "do_sample": False,
+            "max_new_tokens": cfg["decoding"]["max_new_tokens"],
+            "no_repeat_ngram_size": cfg["decoding"]["no_repeat_ngram_size"],
+        }
 
     def transcribe_file(self, wav_path: Path) -> Tuple[str, str]:
-        audio = load_wav_16k(wav_path)
-        chunk_samples = 30 * TARGET_SR
-        parts = []
-        for start in range(0, len(audio), chunk_samples):
-            chunk = audio[start : start + chunk_samples]
-            inputs = self.processor(chunk, sampling_rate=TARGET_SR, return_tensors="pt")
-            with torch.no_grad():
-                ids = self.model.generate(
-                    inputs.input_features.to(self.device),
-                    num_beams=self.num_beams,
-                    max_new_tokens=225,
-                )
-            text = self.processor.batch_decode(ids, skip_special_tokens=True)[0].strip()
-            if text:
-                parts.append(text)
-        raw = " ".join(parts).strip()
-        return raw, normalize_output(raw)
+        sr = self.audio_cfg["sample_rate"]
+        audio = load_wav(wav_path, target_sr=sr)
+        if self.audio_cfg["peak_dbfs"] is not None:
+            audio = peak_normalize(audio, self.audio_cfg["peak_dbfs"])
+        raw = transcribe_many([audio], self.processor, self.model, self.device, self.gen_kwargs,
+                              sr, self.audio_cfg["chunk_length_sec"])[0]
+        return raw, normalize(raw)
 
 
-def launch_gradio(demo_engine: WhisperJavaneseDemo, port: int = 7860) -> None:
+def launch_gradio(engine: WhisperJavaneseDemo, port: int = 7860) -> None:
     import gradio as gr
 
     def predict(audio_filepath: str):
         if not audio_filepath:
             return "", ""
-        return demo_engine.transcribe_file(Path(audio_filepath))
+        return engine.transcribe_file(Path(audio_filepath))
 
     ui = gr.Interface(
         fn=predict,
-        inputs=gr.Audio(sources=["upload", "microphone"], type="filepath", label="Audio Bahasa Jawa (WAV)"),
+        inputs=gr.Audio(sources=["upload", "microphone"], type="filepath", format="wav",
+                        label="Audio Bahasa Jawa (WAV)"),
         outputs=[
             gr.Textbox(label="Transkripsi Model (Mentah)"),
             gr.Textbox(label="Transkripsi Ternormalisasi"),
         ],
         title="Demo ASR Bahasa Jawa (Whisper)",
-        description=f"Model aktif: `{demo_engine.model_id}` | Device: `{demo_engine.device}`",
+        description=f"Model aktif: `{engine.model_id}` | Device: `{engine.device}`",
     )
-    # Saat siap, buka URL http://127.0.0.1:7860 di browser
     print(f"Demo web siap! Buka http://127.0.0.1:{port} di browser Anda.")
     ui.launch(server_name="127.0.0.1", server_port=port)
 
 
 def main():
     parser = argparse.ArgumentParser(description="Demo ASR Bahasa Jawa dengan Whisper")
-    parser.add_argument("--model", default="openai/whisper-small", help="Nama atau path model Whisper")
+    parser.add_argument("--model", default="openai/whisper-small", help="Nama atau folder model Whisper")
     parser.add_argument("--audio", default=None, help="Path file WAV untuk mode CLI")
-    parser.add_argument("--num-beams", type=int, default=5)
+    parser.add_argument("--num-beams", type=int, default=0, help="0 = ikut configs/inference.yaml")
     parser.add_argument("--port", type=int, default=7860)
     parser.add_argument("--dry-run", action="store_true", help="Verifikasi skrip demo tanpa memuat model")
     args = parser.parse_args()
 
     if args.dry_run:
-        print(f"Dry-run demo OK | Model target: {args.model} | Device: {'cuda' if torch.cuda.is_available() else 'cpu'}")
+        print(f"Dry-run demo OK | Model target: {args.model} | "
+              f"Device: {'cuda' if torch.cuda.is_available() else 'cpu'}")
         return
 
     engine = WhisperJavaneseDemo(model_id=args.model, num_beams=args.num_beams)
 
     if args.audio:
         wav_path = Path(args.audio)
-        if not wav_path.is_absolute():
+        if not wav_path.is_absolute() and not wav_path.exists():
             wav_path = ROOT / wav_path
         raw, norm = engine.transcribe_file(wav_path)
         print(f"File       : {wav_path}")
@@ -157,7 +110,7 @@ def main():
     except ImportError:
         print("Gradio tidak terpasang. Jalankan mode CLI interaktif (masukkan path .wav, atau 'q' untuk keluar):")
         while True:
-            path_str = input("Path WAV > ").strip()
+            path_str = input("Path WAV > ").strip().strip('"')
             if not path_str or path_str.lower() in ("q", "quit", "exit"):
                 break
             p = Path(path_str)

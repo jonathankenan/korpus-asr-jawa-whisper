@@ -1,88 +1,71 @@
-"""Utilitas model Whisper, data collator, dan pemuat audio untuk ASR Bahasa Jawa.
+"""Utilitas model Whisper dan data collator untuk ASR Bahasa Jawa.
 
 Referensi:
   - Radford et al. (2022), "Robust Speech Recognition via Large-Scale Weak Supervision"
   - Hugging Face Transformers: WhisperForConditionalGeneration & WhisperProcessor
     https://huggingface.co/docs/transformers/model_doc/whisper
+  - DataCollatorSpeechSeq2SeqWithPadding diadaptasi dari S. Gandhi (2022),
+    "Fine-Tune Whisper For Multilingual ASR with Transformers"
+    https://huggingface.co/blog/fine-tune-whisper
 """
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
-import struct
-import wave
+from typing import Any, Dict, List, Tuple
 
-import numpy as np
 import torch
+import yaml
 from transformers import WhisperForConditionalGeneration, WhisperProcessor
+from transformers.utils import logging as hf_logging
+
+ROOT = Path(__file__).resolve().parent.parent
+
+# Peringatan generate() Whisper di transformers 5 berulang tiap batch dan tidak memengaruhi hasil
+hf_logging.set_verbosity_error()
+hf_logging.disable_progress_bar()
+
+
+def resolve_model(name: str) -> Tuple[str, Dict[str, str]]:
+    """Terjemahkan nama model menjadi argumen from_pretrained.
+
+    Folder lokal (hasil fine-tuning) dipakai apa adanya; nama Hugging Face dikunci pada
+    revisi di configs/models.yaml.
+    """
+    for candidate in (Path(name), ROOT / name):
+        if candidate.is_dir():
+            return str(candidate), {}
+    with open(ROOT / "configs" / "models.yaml", encoding="utf-8") as f:
+        known = yaml.safe_load(f)["models"]
+    if name in known:
+        return name, {"revision": known[name]["revision"]}
+    if name.startswith("openai/"):
+        return name, {}
+    raise FileNotFoundError(f"Model tidak ditemukan: {name}")
 
 
 def load_whisper(
     model_name: str = "openai/whisper-small",
     language: str = "javanese",
     task: str = "transcribe",
-    freeze_feature_encoder: bool = False,
+    freeze_encoder: bool = False,
+    for_training: bool = False,
 ) -> Tuple[WhisperProcessor, WhisperForConditionalGeneration]:
-    """Muat processor dan model Whisper pretrained dengan konfigurasi Bahasa Jawa."""
-    processor = WhisperProcessor.from_pretrained(model_name, language=language, task=task)
-    model = WhisperForConditionalGeneration.from_pretrained(model_name)
+    """Muat processor dan model Whisper dengan konfigurasi Bahasa Jawa."""
+    path, kwargs = resolve_model(model_name)
+    processor = WhisperProcessor.from_pretrained(path, language=language, task=task, **kwargs)
+    model = WhisperForConditionalGeneration.from_pretrained(path, **kwargs)
 
     model.generation_config.language = language
     model.generation_config.task = task
     model.generation_config.forced_decoder_ids = None
-    model.config.use_cache = False
+    model.generation_config.max_length = None
 
-    if freeze_feature_encoder:
-        model.freeze_feature_encoder()
+    if for_training:
+        model.config.use_cache = False
+    if freeze_encoder:
+        model.freeze_encoder()
 
     return processor, model
-
-
-def load_wav_segment(
-    audio_path: Path,
-    start_sec: Optional[float] = None,
-    end_sec: Optional[float] = None,
-    target_sr: int = 16_000,
-) -> np.ndarray:
-    """Baca file WAV (atau potong segmen) menjadi array float32 16 kHz mono."""
-    with wave.open(str(audio_path), "rb") as wf:
-        sr = wf.getframerate()
-        nc = wf.getnchannels()
-        sw = wf.getsampwidth()
-        n_frames = wf.getnframes()
-
-        start_frame = 0
-        end_frame = n_frames
-        if start_sec is not None and end_sec is not None:
-            start_frame = max(0, int(start_sec * sr))
-            end_frame = min(n_frames, int(end_sec * sr))
-
-        wf.setpos(start_frame)
-        raw = wf.readframes(max(0, end_frame - start_frame))
-
-    if not raw:
-        return np.zeros(0, dtype=np.float32)
-
-    if sw == 2:
-        arr = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-    elif sw == 1:
-        arr = (np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
-    elif sw == 4:
-        arr = np.frombuffer(raw, dtype=np.int32).astype(np.float32) / 2147483648.0
-    else:
-        fmt = f"<{len(raw) // sw}h"
-        arr = np.array(struct.unpack(fmt, raw), dtype=np.float32) / 32768.0
-
-    if nc > 1:
-        arr = arr.reshape(-1, nc).mean(axis=1)
-
-    if sr != target_sr and len(arr) > 0:
-        n_out = int(round(len(arr) * target_sr / sr))
-        x_old = np.linspace(0.0, 1.0, num=len(arr), endpoint=False)
-        x_new = np.linspace(0.0, 1.0, num=n_out, endpoint=False)
-        arr = np.interp(x_new, x_old, arr).astype(np.float32)
-
-    return arr
 
 
 @dataclass

@@ -1,25 +1,16 @@
-# Dependensi Python untuk sistem ASR Bahasa Jawa dengan Whisper
-# Fase 2 IF4071 — Pemrosesan Ucapan (Semester 1 2026/2027)
+# Dependensi sistem ASR Bahasa Jawa dengan Whisper (Fase 2 IF4071)
 #
 # Install: pip install -r requirements.txt
-# (Disarankan pakai virtual environment atau conda)
+#
+# Diuji di Windows 11, Python 3.13.7 (CPU) dengan:
+#   torch 2.12.0, transformers 5.8.1, accelerate 1.13.0, numpy 2.3.4, PyYAML 6.0.3
 
-# --- Core ML / Audio ---
 torch>=2.1.0
-torchaudio>=2.1.0
-transformers>=4.37.0        # Whisper via HuggingFace
-datasets>=2.16.0            # HuggingFace Datasets (opsional, untuk streaming)
-accelerate>=0.26.0          # Mixed precision & multi-GPU training
-
-# --- Audio processing ---
-librosa>=0.10.1             # Resampling & feature extraction berkualitas tinggi
-soundfile>=0.12.1           # Baca/tulis audio (WAV, FLAC, dsb.)
-audioread>=3.0.0            # Backend librosa
-
-# --- Evaluasi ---
-jiwer>=3.0.3                # WER & CER
-
-# --- Utilitas ---
+transformers>=4.46.0        # Whisper, Seq2SeqTrainer (butuh argumen processing_class)
+accelerate>=0.26.0          # dipakai Seq2SeqTrainer
+huggingface_hub             # unduh bobot pada revisi yang dikunci
 numpy>=1.24.0
-pandas>=2.0.0
-tqdm>=4.66.0
+PyYAML>=6.0
+
+# Hanya untuk demo web (demo/app.py tanpa --audio)
+gradio>=4.0

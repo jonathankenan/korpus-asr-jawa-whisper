@@ -1,24 +1,35 @@
-"""Analisis kesalahan transkripsi ASR Bahasa Jawa sesuai SPEC.md bagian 5C.
+"""Analisis kesalahan transkripsi ASR Bahasa Jawa (spesifikasi Fase 2 §5C).
 
 Menganalisis:
-  1. Pasangan substitusi kata tersering (ref -> hyp).
-  2. Kata yang paling sering terhapus (deletion) dan tersisip (insertion).
-  3. Pengaruh dialek, status penutur (native/non-native/heritage), dan panjang ujaran.
-  4. Pengaruh label kejadian/noise (event) jika digabungkan dengan manifest.
-  5. Ujaran dengan WER tertinggi untuk inspeksi kualitatif.
+  1. Komposisi kesalahan (substitusi, penghapusan, penyisipan) dan kata tersering.
+  2. Perbedaan bahasa lisan vs tulis (varian ejaan a/o, dh/d, th/t, e/i, u/o).
+  3. Kata jarang: tingkat salah menurut frekuensi kata pada data latih fold tersebut.
+  4. Pengaruh penutur, dialek, status penutur, kejadian/noise, durasi, dan bahasa.
+  5. Kegagalan decoding (prediksi kosong, penyisipan berlebih) dan ujaran terburuk.
+  6. Opsional --baseline: kata yang membaik atau memburuk dibanding eksperimen lain.
 
 Contoh:
-  python src/analyze_errors.py --pred results/predictions_fold1_pretrained.csv --tag pretrained
+  python src/analyze_errors.py --exp small-pretrained
+  python src/analyze_errors.py --exp tiny-ft --baseline tiny-pretrained
   python src/analyze_errors.py --self-test
 """
 
 import argparse
 import collections
-import csv
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+from data import load_manifest, split_map
+from evaluate import aggregate, load_predictions, md_cell, table
+from normalize_text import normalize
+
 ROOT = Path(__file__).resolve().parent.parent
+OUT_DIR = ROOT / "results" / "analysis"
+FREQ_BUCKETS = [(0, 0, "tidak ada di data latih (OOV)"), (1, 5, "1-5 kali"),
+                (6, 50, "6-50 kali"), (51, 10 ** 9, "> 50 kali")]
+# (nama, pengganti) -> dua kata dianggap varian jika sama setelah penggantian
+SPELLING_RULES = [("a/o", (("o", "a"),)), ("dh/d", (("dh", "d"),)), ("th/t", (("th", "t"),)),
+                  ("e/i", (("i", "e"),)), ("o/u", (("u", "o"),))]
 
 
 def align_words(ref: List[str], hyp: List[str]) -> List[Tuple[str, str, str]]:
@@ -65,119 +76,210 @@ def align_words(ref: List[str], hyp: List[str]) -> List[Tuple[str, str, str]]:
     return ops
 
 
-def analyze_rows(rows: List[Dict[str, str]], ref_col: str, hyp_col: str, top_k: int = 15) -> Dict:
-    """Jalankan analisis kesalahan pada daftar prediksi."""
-    subs = collections.Counter()
-    dels = collections.Counter()
-    inss = collections.Counter()
-    by_attr: Dict[str, Dict[str, List[float]]] = {
-        "dialect": collections.defaultdict(list),
-        "speaker_status": collections.defaultdict(list),
-        "speaker": collections.defaultdict(list),
-    }
-    worst: List[Tuple[float, str, str, str]] = []
+def spelling_variant(ref: str, hyp: str) -> str:
+    """Nama aturan jika dua kata hanya berbeda ejaan, selain itu string kosong."""
+    for name, pairs in SPELLING_RULES:
+        a, b = ref, hyp
+        for old, new in pairs:
+            a, b = a.replace(old, new), b.replace(old, new)
+        if a == b:
+            return name
+    squeeze = lambda w: "".join(c for i, c in enumerate(w) if i == 0 or c != w[i - 1])
+    return "huruf ganda" if squeeze(ref) == squeeze(hyp) else ""
 
+
+def train_vocabulary() -> Dict[int, collections.Counter]:
+    """Frekuensi kata pada data latih tiap fold."""
+    manifest = load_manifest()
+    vocab = {}
+    for k in range(1, 6):
+        smap = split_map(k)
+        vocab[k] = collections.Counter(
+            w for r in manifest if smap[r["utt_id"]] == "train"
+            for w in normalize(r["text_raw"]).split())
+    return vocab
+
+
+def collect(rows: List[Dict], vocab: Dict[int, collections.Counter]) -> Dict:
+    """Hitung semua statistik kata dari baris prediksi."""
+    subs, dels, inss = collections.Counter(), collections.Counter(), collections.Counter()
+    variants, variant_examples = collections.Counter(), collections.defaultdict(collections.Counter)
+    freq = collections.defaultdict(lambda: [0, 0])      # bucket -> [salah, total]
+    per_word = collections.defaultdict(lambda: [0, 0])  # kata referensi -> [salah, total]
+    n_sub = 0
     for r in rows:
-        ref = (r.get(ref_col) or "").strip()
-        hyp = (r.get(hyp_col) or "").strip()
-        if not ref:
-            continue
-        rw, hw = ref.split(), hyp.split()
-        ops = align_words(rw, hw)
-        errs = 0
-        for op, rt, ht in ops:
+        for op, rt, ht in align_words(r["ref"].split(), r["hyp"].split()):
             if op == "sub":
                 subs[(rt, ht)] += 1
-                errs += 1
+                n_sub += 1
+                rule = spelling_variant(rt, ht)
+                if rule:
+                    variants[rule] += 1
+                    variant_examples[rule][(rt, ht)] += 1
             elif op == "del":
                 dels[rt] += 1
-                errs += 1
             elif op == "ins":
                 inss[ht] += 1
-                errs += 1
-
-        utt_wer = 100.0 * errs / max(1, len(rw))
-        for attr in by_attr:
-            key = (r.get(attr) or "unknown").strip() or "unknown"
-            by_attr[attr][key].append(utt_wer)
-        worst.append((utt_wer, r.get("utt_id", "-"), ref, hyp))
-
-    worst.sort(reverse=True)
-    return {
-        "top_substitutions": subs.most_common(top_k),
-        "top_deletions": dels.most_common(top_k),
-        "top_insertions": inss.most_common(top_k),
-        "by_attr": {
-            attr: {k: round(sum(v) / len(v), 2) for k, v in sorted(groups.items())}
-            for attr, groups in by_attr.items()
-        },
-        "worst_utterances": worst[:top_k],
-    }
+            if op != "ins":
+                wrong = int(op != "ok")
+                per_word[rt][0] += wrong
+                per_word[rt][1] += 1
+                count = vocab[r["fold"]][rt] if vocab else 0
+                label = next(name for lo, hi, name in FREQ_BUCKETS if lo <= count <= hi)
+                freq[label][0] += wrong
+                freq[label][1] += 1
+    return {"subs": subs, "dels": dels, "inss": inss, "variants": variants,
+            "variant_examples": variant_examples, "freq": freq, "per_word": per_word, "n_sub": n_sub}
 
 
-def write_report(analysis: Dict, out_path: Path, tag: str) -> None:
-    """Tulis laporan analisis kesalahan dalam format Markdown."""
+def grouped_metrics(rows: List[Dict], key) -> List[List]:
+    groups = collections.defaultdict(list)
+    for r in rows:
+        for value in key(r):
+            groups[value].append(r)
+    body = []
+    for value, subset in sorted(groups.items()):
+        m = aggregate(subset)
+        body.append([value, m["n_utterances"], m["ref_words"], m["wer_pct"], m["cer_pct"]])
+    return body
+
+
+def write_report(exp: str, rows: List[Dict], baseline: str, top_k: int, out_path: Path) -> None:
+    vocab = train_vocabulary()
+    by_group = {g: [r for r in rows if r["group"] == g] for g in ("k05", "k11")}
+    stats = {g: collect(sel, vocab) for g, sel in by_group.items()}
+    lines = [f"# Analisis Kesalahan ASR ({exp})", "",
+             "Dibuat otomatis oleh `src/analyze_errors.py` dari prediksi test. Referensi k11 masih draf ASR, "
+             "jadi kedua korpus dipisahkan.", "", "## 1. Komposisi kesalahan", ""]
+    body = []
+    for g, sel in by_group.items():
+        m = aggregate(sel)
+        errors = m["word_sub"] + m["word_del"] + m["word_ins"]
+        body.append([g, m["wer_pct"], m["cer_pct"]] +
+                    [f"{m[k]} ({100 * m[k] / max(1, errors):.0f}%)" for k in ("word_sub", "word_del", "word_ins")])
+    lines += table(["Korpus", "WER", "CER", "Substitusi", "Penghapusan", "Penyisipan"], body)
+
+    lines += ["## 2. Kata yang paling sering salah dikenali", ""]
+    for g in ("k05", "k11"):
+        s = stats[g]
+        lines += [f"### {g}: substitusi tersering", ""]
+        lines += table(["Referensi", "Prediksi", "Frekuensi"],
+                       [[f"`{a}`", f"`{b}`", c] for (a, b), c in s["subs"].most_common(top_k)])
+        lines += [f"### {g}: penghapusan dan penyisipan tersering", ""]
+        dels, inss = s["dels"].most_common(top_k), s["inss"].most_common(top_k)
+        lines += table(["Dihapus", "n", "Disisipkan", "n"],
+                       [[f"`{dels[i][0]}`" if i < len(dels) else "", dels[i][1] if i < len(dels) else "",
+                         f"`{inss[i][0]}`" if i < len(inss) else "", inss[i][1] if i < len(inss) else ""]
+                        for i in range(max(len(dels), len(inss)))])
+        hard = sorted(((w, e, t) for w, (e, t) in s["per_word"].items() if t >= 10),
+                      key=lambda x: (-x[1] / x[2], -x[2], x[0]))[:top_k]
+        lines += [f"### {g}: kata (muncul ≥ 10 kali) dengan tingkat salah tertinggi", ""]
+        lines += table(["Kata", "Salah", "Muncul", "Tingkat salah (%)"],
+                       [[f"`{w}`", e, t, round(100 * e / t)] for w, e, t in hard])
+
+    lines += ["## 3. Perbedaan bahasa lisan dan bentuk tulis", "",
+              "Substitusi yang hanya berbeda ejaan (lafal sama atau hampir sama).", ""]
+    body = []
+    for g in ("k05", "k11"):
+        s = stats[g]
+        total = sum(s["variants"].values())
+        for rule, count in s["variants"].most_common():
+            ex = ", ".join(f"{a}→{b} ({c})" for (a, b), c in s["variant_examples"][rule].most_common(4))
+            body.append([g, rule, count, f"{100 * count / max(1, s['n_sub']):.1f}", ex])
+        body.append([g, "**total varian**", total, f"{100 * total / max(1, s['n_sub']):.1f}", ""])
+    lines += table(["Korpus", "Aturan", "Jumlah", "% dari substitusi", "Contoh (referensi→prediksi)"], body)
+
+    lines += ["## 4. Kata jarang", "",
+              "Tingkat salah kata referensi (substitusi + penghapusan) menurut frekuensinya pada data latih fold.", ""]
+    body = []
+    for _, _, name in FREQ_BUCKETS:
+        row = [name]
+        for g in ("k05", "k11"):
+            e, t = stats[g]["freq"].get(name, [0, 0])
+            row += [t, round(100 * e / t, 1) if t else "-"]
+        body.append(row)
+    lines += table(["Frekuensi di data latih", "Kata k05", "Salah k05 (%)", "Kata k11", "Salah k11 (%)"], body)
+
+    header = ["Nilai", "Ujaran", "Kata", "WER (%)", "CER (%)"]
+    sections = [
+        ("5. Pengaruh penutur", lambda r: [f"{r['speaker']} ({r['group']}, {r['gender']}, {r['speaker_status']})"]),
+        ("6. Pengaruh dialek (tingkat penutur)", lambda r: [f"{r['group']}: {r['dialect_family']}"]),
+        ("7. Pengaruh status penutur", lambda r: [f"{r['group']}: {r['speaker_status']}"]),
+        ("8. Pengaruh noise dan kejadian rekaman", lambda r: [f"{r['group']}: {e}" for e in r["events"]]),
+        ("9. Pengaruh durasi ujaran", lambda r: [f"{r['group']}: {r['duration_bucket']}"]),
+        ("10. Pengaruh campur kode (label bahasa k11)",
+         lambda r: [r["language_label"]] if r["group"] == "k11" else []),
+    ]
+    for title, key in sections:
+        lines += [f"## {title}", ""] + table(header, grouped_metrics(rows, key))
+
+    lines += ["## 11. Kegagalan decoding", ""]
+    body = []
+    for g, sel in by_group.items():
+        empty = sum(1 for r in sel if not r["hyp"])
+        runaway = [r for r in sel if r["wi"] > r["wn"]]
+        short = sum(1 for r in runaway if r["duration"] < 1)
+        all_ins = sum(r["wi"] for r in sel)
+        body.append([g, empty, len(runaway), short,
+                     f"{100 * sum(r['wi'] for r in runaway) / max(1, all_ins):.0f}"])
+    lines += table(["Korpus", "Prediksi kosong", "Penyisipan > jumlah kata referensi",
+                    "… di antaranya < 1 s", "% seluruh penyisipan dari ujaran ini"], body)
+
+    lines += ["## 12. Ujaran dengan WER tertinggi (referensi ≥ 4 kata)", ""]
+    worst = sorted((r for r in rows if r["wn"] >= 4),
+                   key=lambda r: (-(r["ws"] + r["wd"] + r["wi"]) / r["wn"], r["utt_id"]))[:top_k]
+    lines += table(["utt_id", "WER (%)", "Durasi (s)", "Referensi", "Prediksi"],
+                   [[r["utt_id"], round(100 * (r["ws"] + r["wd"] + r["wi"]) / r["wn"]), r["duration"],
+                     md_cell(r["ref"][:200]), md_cell(r["hyp"][:200])] for r in worst])
+
+    if baseline:
+        base_rows = {r["utt_id"]: r for r in load_predictions(baseline)}
+        shared = [r for r in rows if r["utt_id"] in base_rows]
+        lines += [f"## 13. Perubahan dibanding `{baseline}`", ""]
+        body = []
+        for g in ("k05", "k11"):
+            new = [r for r in shared if r["group"] == g]
+            old = [base_rows[r["utt_id"]] for r in new]
+            if not new:
+                continue
+            err = lambda r: r["ws"] + r["wd"] + r["wi"]
+            better = sum(1 for a, b in zip(new, old) if err(a) < err(b))
+            worse = sum(1 for a, b in zip(new, old) if err(a) > err(b))
+            body.append([g, len(new), aggregate(old)["wer_pct"], aggregate(new)["wer_pct"], better, worse,
+                         len(new) - better - worse])
+        lines += table(["Korpus", "Ujaran", "WER pembanding", f"WER {exp}", "Membaik", "Memburuk", "Tetap"], body)
+        for g in ("k05", "k11"):
+            ids = {r["utt_id"] for r in shared if r["group"] == g}
+            old_words = collect([base_rows[i] for i in sorted(ids)], vocab)["per_word"]
+            new_words = collect([r for r in shared if r["group"] == g], vocab)["per_word"]
+            delta = sorted(((w, old_words[w][0], new_words[w][0], t) for w, (_, t) in new_words.items()),
+                           key=lambda x: (x[2] - x[1], x[0]))
+            better = [x for x in delta if x[2] < x[1]][:top_k]
+            worse = [x for x in reversed(delta) if x[2] > x[1]][:top_k]
+            for title, items in (("paling membaik", better), ("paling memburuk", worse)):
+                lines += [f"### {g}: kata {title}", ""]
+                lines += table(["Kata", "Salah (pembanding)", f"Salah ({exp})", "Muncul"],
+                               [[f"`{w}`", a, b, t] for w, a, b, t in items])
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(out_path, "w", encoding="utf-8") as f:
-        f.write(f"# Analisis Kesalahan ASR ({tag})\n\n")
-
-        f.write("## 1. Substitusi Kata Tersering\n\n")
-        f.write("| Referensi | Prediksi | Frekuensi |\n|---|---|---|\n")
-        for (rt, ht), cnt in analysis["top_substitutions"]:
-            f.write(f"| `{rt}` | `{ht}` | {cnt} |\n")
-
-        f.write("\n## 2. Penghapusan (Deletion) Tersering\n\n")
-        f.write("| Kata Referensi | Frekuensi |\n|---|---|\n")
-        for rt, cnt in analysis["top_deletions"]:
-            f.write(f"| `{rt}` | {cnt} |\n")
-
-        f.write("\n## 3. Penyisipan (Insertion) Tersering\n\n")
-        f.write("| Kata Prediksi | Frekuensi |\n|---|---|\n")
-        for ht, cnt in analysis["top_insertions"]:
-            f.write(f"| `{ht}` | {cnt} |\n")
-
-        f.write("\n## 4. Rata-rata WER per Atribut\n\n")
-        for attr, mapping in analysis["by_attr"].items():
-            f.write(f"### `{attr}`\n\n| Nilai | Rata-rata WER (%) |\n|---|---|\n")
-            for k, v in mapping.items():
-                f.write(f"| {k} | {v} |\n")
-            f.write("\n")
-
-        f.write("## 5. Ujaran dengan Kesalahan Tertinggi\n\n")
-        f.write("| utt_id | WER (%) | Referensi | Prediksi |\n|---|---|---|---|\n")
-        for wer, uid, ref, hyp in analysis["worst_utterances"]:
-            f.write(f"| {uid} | {wer:.1f} | {ref.replace('|', '\\|')} | {hyp.replace('|', '\\|')} |\n")
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def run_self_test():
-    sample = [
-        {
-            "utt_id": "S01_0001",
-            "speaker": "S01",
-            "dialect": "Suroboyoan",
-            "speaker_status": "native",
-            "ref_norm": "aku mangan sego goreng",
-            "pred_norm": "aku mangan sega goreng",
-        },
-        {
-            "utt_id": "S03_0001",
-            "speaker": "S03",
-            "dialect": "Solo",
-            "speaker_status": "non-native",
-            "ref_norm": "sugeng rawuh ing bandung",
-            "pred_norm": "sugeng rawuh bandung",
-        },
-    ]
-    res = analyze_rows(sample, "ref_norm", "pred_norm", top_k=5)
-    assert res["top_substitutions"][0] == (("sego", "sega"), 1)
-    assert res["top_deletions"][0] == ("ing", 1)
-    print("Self-test lolos: alignment substitusi & penghapusan akurat.")
+    ops = align_words("aku mangan sego goreng".split(), "aku mangan sega goreng".split())
+    assert [o for o in ops if o[0] != "ok"] == [("sub", "sego", "sega")]
+    ops = align_words("sugeng rawuh ing bandung".split(), "sugeng rawuh bandung".split())
+    assert [o for o in ops if o[0] != "ok"] == [("del", "ing", "<eps>")]
+    assert spelling_variant("sego", "sega") == "a/o"
+    assert spelling_variant("wedhi", "wedi") == "dh/d"
+    assert spelling_variant("mangan", "turu") == ""
+    print("Self-test lolos: alignment dan deteksi varian ejaan akurat.")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Analisis kesalahan transkripsi ASR")
-    parser.add_argument("--pred", default=None, help="Path file CSV prediksi")
-    parser.add_argument("--tag", default="eval", help="Label laporan")
+    parser.add_argument("--exp", default=None, help="Nama eksperimen di results/predictions")
+    parser.add_argument("--baseline", default="", help="Eksperimen pembanding (opsional)")
     parser.add_argument("--top-k", type=int, default=15)
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
@@ -185,25 +287,14 @@ def main():
     if args.self_test:
         run_self_test()
         return
+    if not args.exp:
+        raise SystemExit("Berikan --exp <nama> atau --self-test.")
 
-    if not args.pred:
-        raise SystemExit("Berikan --pred <file.csv> atau --self-test.")
-
-    pred_path = Path(args.pred)
-    if not pred_path.is_absolute():
-        pred_path = ROOT / pred_path
-
-    with open(pred_path, encoding="utf-8", newline="") as f:
-        rows = list(csv.DictReader(f))
+    rows = load_predictions(args.exp)
     if not rows:
-        raise SystemExit("File prediksi kosong.")
-
-    ref_col = "ref_norm" if "ref_norm" in rows[0] else "ref_raw"
-    hyp_col = "pred_norm" if "pred_norm" in rows[0] else "pred_raw"
-    analysis = analyze_rows(rows, ref_col, hyp_col, top_k=args.top_k)
-
-    out_path = ROOT / "results" / f"error_analysis_{args.tag}.md"
-    write_report(analysis, out_path, args.tag)
+        raise SystemExit(f"Tidak ada prediksi untuk {args.exp}.")
+    out_path = OUT_DIR / f"{args.exp}.md"
+    write_report(args.exp, rows, args.baseline, args.top_k, out_path)
     print(f"Laporan analisis kesalahan disimpan ke {out_path}")
 
 

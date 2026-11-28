@@ -22,9 +22,11 @@ import argparse
 import csv
 import wave
 import struct
-import os
 import math
+from functools import lru_cache
 from pathlib import Path
+
+from audio import resolve_audio_path
 
 ROOT = Path(__file__).resolve().parent.parent
 TARGET_SR = 16_000  # Hz — spesifikasi Fase 2
@@ -165,12 +167,22 @@ def slice_segment(samples: list, sr: int, start_sec: float, end_sec: float) -> l
 # Pipeline utama
 # ---------------------------------------------------------------------------
 
-def process_row(row: dict, root: Path, out_dir: Path, apply_vad: bool) -> str:
+@lru_cache(maxsize=1)
+def load_source(path: Path):
+    """File sumber sebagai (samples mono 16-bit, sample_rate).
+
+    Di-cache karena baris manifest berurutan memakai file yang sama.
+    """
+    samples, sr, nc, sw = read_wav(path)
+    return to_int16(to_mono(samples, nc), sw), sr
+
+
+def process_row(row: dict, out_dir: Path, apply_vad: bool) -> str:
     """Proses satu baris manifest. Kembalikan status ('ok', 'skip:<alasan>')."""
     if row.get("usable", "yes") != "yes":
         return "skip:not_usable"
 
-    audio_path = root / row["audio_path"]
+    audio_path = resolve_audio_path(row["audio_path"])
     if not audio_path.exists():
         return "skip:audio_missing"
 
@@ -181,15 +193,10 @@ def process_row(row: dict, root: Path, out_dir: Path, apply_vad: bool) -> str:
         return "skip:bad_timing"
 
     try:
-        samples, sr, nc, sw = read_wav(audio_path)
+        # 1-2. Baca, konversi ke mono dan 16-bit
+        samples, sr = load_source(audio_path)
     except Exception as exc:
         return f"skip:read_error:{exc}"
-
-    # 1. Konversi ke mono
-    samples = to_mono(samples, nc)
-
-    # 2. Konversi ke 16-bit
-    samples = to_int16(samples, sw)
 
     # 3. Potong segmen
     samples = slice_segment(samples, sr, start, end)
@@ -251,7 +258,7 @@ def main():
           + (", VAD aktif" if args.vad else ""))
 
     for i, row in enumerate(rows, 1):
-        status = process_row(row, ROOT, out_dir, args.vad)
+        status = process_row(row, out_dir, args.vad)
         if status == "ok":
             counts["ok"] += 1
         else:

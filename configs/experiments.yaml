@@ -1,0 +1,122 @@
+# Skenario eksperimen (spesifikasi Fase 2 §5B). Dijalankan oleh src/run_experiments.py.
+#
+#   python src/run_experiments.py --group local     # laptop tanpa GPU
+#   python src/run_experiments.py --group gpu       # GPU (Colab/Kaggle)
+#   python src/run_experiments.py tiny-pretrained   # satu eksperimen
+#
+# Urutan di bawah adalah urutan eksekusi dalam satu grup.
+# kind: pretrained -> transkripsi test set kelima fold tanpa pelatihan
+# kind: finetune   -> latih per fold, lalu transkripsi test fold tersebut
+# lr_from          -> pakai learning rate eksperimen sumber dengan WER validation terkecil
+
+experiments:
+  # --- Pembanding pretrained: variasi ukuran model ---
+  tiny-pretrained:
+    group: local
+    kind: pretrained
+    model: openai/whisper-tiny
+    purpose: Baseline tanpa fine-tuning; variasi ukuran model.
+  base-pretrained:
+    group: local
+    kind: pretrained
+    model: openai/whisper-base
+    purpose: Baseline tanpa fine-tuning; variasi ukuran model.
+
+  # --- Variasi preprocessing dan decoding (model tiny) ---
+  tiny-pretrained-nopeak:
+    group: local
+    kind: pretrained
+    model: openai/whisper-tiny
+    peak_dbfs: none
+    baseline: tiny-pretrained
+    purpose: Tanpa normalisasi amplitudo (sebelum vs sesudah preprocessing).
+  tiny-pretrained-beam5:
+    group: local
+    kind: pretrained
+    model: openai/whisper-tiny
+    num_beams: 5
+    baseline: tiny-pretrained
+    purpose: Beam search 5 dibanding greedy.
+
+  # --- Fine-tuning tiny di CPU: encoder beku, decoder dilatih ---
+  tiny-ft-lr1e-5:
+    group: local
+    kind: finetune
+    model: openai/whisper-tiny
+    freeze_encoder: true
+    epochs: 2
+    grad_accum: 1
+    warmup_steps: 50
+    lr: 1.0e-5
+    folds: [1]
+    baseline: tiny-pretrained
+    purpose: Pencarian learning rate (fold 1).
+  tiny-ft-lr5e-5:
+    group: local
+    kind: finetune
+    model: openai/whisper-tiny
+    freeze_encoder: true
+    epochs: 2
+    grad_accum: 1
+    warmup_steps: 50
+    lr: 5.0e-5
+    folds: [1]
+    baseline: tiny-pretrained
+    purpose: Pencarian learning rate (fold 1).
+  tiny-ft:
+    group: local
+    kind: finetune
+    model: openai/whisper-tiny
+    freeze_encoder: true
+    epochs: 2
+    grad_accum: 1
+    warmup_steps: 50
+    lr_from: [tiny-ft-lr1e-5, tiny-ft-lr5e-5]
+    folds: [1, 2, 3, 4, 5]
+    baseline: tiny-pretrained
+    purpose: Pretrained vs fine-tuned (tiny, 5 fold).
+
+  # --- Baseline model utama (paling lama di CPU) ---
+  small-pretrained:
+    group: local
+    kind: pretrained
+    model: openai/whisper-small
+    purpose: Baseline model utama.
+
+  # --- Fine-tuning small (GPU) ---
+  small-ft-lr5e-6:
+    group: gpu
+    kind: finetune
+    model: openai/whisper-small
+    epochs: 5
+    lr: 5.0e-6
+    folds: [1]
+    baseline: small-pretrained
+    purpose: Pencarian learning rate (fold 1).
+  small-ft-lr1e-5:
+    group: gpu
+    kind: finetune
+    model: openai/whisper-small
+    epochs: 5
+    lr: 1.0e-5
+    folds: [1]
+    baseline: small-pretrained
+    purpose: Pencarian learning rate (fold 1).
+  small-ft-lr3e-5:
+    group: gpu
+    kind: finetune
+    model: openai/whisper-small
+    epochs: 5
+    lr: 3.0e-5
+    folds: [1]
+    baseline: small-pretrained
+    purpose: Pencarian learning rate (fold 1).
+  small-ft:
+    group: gpu
+    kind: finetune
+    model: openai/whisper-small
+    epochs: 5
+    lr_from: [small-ft-lr5e-6, small-ft-lr1e-5, small-ft-lr3e-5]
+    folds: [1, 2, 3, 4, 5]
+    baseline: small-pretrained
+    purpose: Pretrained vs fine-tuned (model utama, 5 fold).

@@ -19,9 +19,11 @@ import collections
 import wave
 from pathlib import Path
 
+from audio import corpus_dir, resolve_audio_path
+
 ROOT = Path(__file__).resolve().parent.parent
-K11 = ROOT / "corpus_k11"
-K05 = ROOT / "corpus_k05"
+K11 = corpus_dir("corpus_k11")  # default corpus_k11/, dapat dialihkan lewat env CORPUS_K11
+K05 = corpus_dir("corpus_k05")  # default corpus_k05/, dapat dialihkan lewat env CORPUS_K05
 OUT = ROOT / "data"
 
 K05_ID_OFFSET = 10  # S01-S10 kelompok 5 menjadi S11-S20
@@ -158,7 +160,7 @@ def build():
             "orig_speaker": spk,
             "orig_file": orig_file,
             "orig_seg": seg,
-            "audio_path": str(audio.relative_to(ROOT)),
+            "audio_path": f"corpus_k11/{audio.relative_to(K11).as_posix()}",
             "start": r["start"],
             "end": r["end"],
             "duration": round(end - start, 3) if start is not None and end is not None else "",
@@ -201,7 +203,7 @@ def build():
             "orig_speaker": orig_spk,
             "orig_file": orig_file,
             "orig_seg": "",
-            "audio_path": str(audio.relative_to(ROOT)),
+            "audio_path": f"corpus_k05/{audio.relative_to(K05).as_posix()}",
             "start": r["Start_Time"],
             "end": r["End_Time"],
             "duration": round(end - start, 3) if start is not None and end is not None else "",
@@ -276,7 +278,7 @@ def main():
         rows = by_spk[spk]
         g = rows[0]["group"]
         audio_files = sorted({r["audio_path"] for r in rows})
-        audio_sec = sum(wav_seconds(ROOT / p) or 0 for p in audio_files)
+        audio_sec = sum(wav_seconds(resolve_audio_path(p)) or 0 for p in audio_files)
         usable = [r for r in rows if r["text_raw"] and "neg_duration" not in r["flags"]]
         dialect = spk11[spk]["dialect"] if g == "k11" else meta05[rows[0]["orig_speaker"]]["Language_Dialect"].strip()
         speakers.append({

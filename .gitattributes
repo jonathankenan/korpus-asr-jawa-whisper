@@ -1,0 +1,2 @@
+# Skrip shell harus berakhir baris LF agar bisa dijalankan di Git Bash dan Linux
+*.sh text eol=lf
